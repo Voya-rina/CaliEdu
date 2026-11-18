@@ -27,5 +27,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "StepEdu"
+rootProject.name = "CaliEdu"
 include(":app")

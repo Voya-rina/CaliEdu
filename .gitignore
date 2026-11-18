@@ -1,56 +1,49 @@
-# ---- 密钥与本地配置（含 API Key / 访问码，绝不入库）----
+# ================= CaliEdu =================
+# Android + Kotlin 单工程。别把本机路径、签名和构建产物带进仓库。
+
+# ---- 本机配置（含 SDK 路径 / Key）----
+local.properties
 .env
 .env.local
 .access.json
 
-# ---- Python ----
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-build/
-dist/
-
-# ---- 运行期数据 ----
-data/*.db
-data/*.db-journal
-data/*.db-wal
-data/*.csv
-data/*.json
-!data/.gitkeep
-
-# log
-*.log
-*.log.*
-
-# ---- 测试 / 工具缓存 ----
-.pytest_cache/
-.ruff_cache/
-.mypy_cache/
-.coverage
-htmlcov/
-
-# ---- 交付物与备份（体积大、可再生，不入库）----
-*.zip
-*.pptx
-
-# ---- 系统 ----
-.DS_Store
-Thumbs.db
-desktop.ini
-
-# 子项目
-QuestEdu/
-对话.md
-
-# ---- Android / Gradle ----
+# ---- Gradle / 构建产物 ----
 .gradle/
+build/
 .kotlin/
-local.properties
-*.iml
-.idea/
 captures/
 .cxx/
 .externalNativeBuild/
 
+# ---- IDE ----
+.idea/
+*.iml
+
+# ---- 安装包与签名（体积大，或含私钥）----
+*.apk
+*.aab
+*.ap_
+*.jks
+*.keystore
+key.properties
+
+# ---- 本机走查产物：截图 / uiautomator dump / 堆转储，都可再生 ----
+design/*.png
+design/*.xml
+design/*.bin
+*.hprof
+
+# ---- Python 字节码（app/src/main/python 由 Gradle 同步）----
+__pycache__/
+*.py[cod]
+
+# ---- 日志与系统垃圾 ----
+*.log
+*.log.*
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 同仓库里的旧 demo，不入库 ----
+QuestEdu/
+对话.md

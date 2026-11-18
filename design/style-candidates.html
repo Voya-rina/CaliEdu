@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CaliEdu · 界面风格候选</title>
+<style>
+  :root { --page:#EFEEEB; --ink:#1B1B18; --sub:#6B6A64; --line:#DEDCD6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink);
+         font-family:-apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; }
+  header { padding:44px 40px 26px; max-width:1240px; margin:0 auto; }
+  header h1 { margin:0 0 10px; font-size:26px; font-weight:600; letter-spacing:-.01em; }
+  header p { margin:0; font-size:14.5px; line-height:1.7; color:var(--sub); max-width:620px; }
+  .grid { max-width:1240px; margin:0 auto; padding:0 40px 70px;
+          display:grid; grid-template-columns:repeat(auto-fit,360px);
+          justify-content:center; gap:34px 40px; }
+  .label { display:flex; align-items:baseline; gap:10px; margin-bottom:12px; }
+  .label b { font-size:14px; font-weight:600; }
+  .label span { font-size:12.5px; color:var(--sub); }
+  .phone { width:360px; min-height:600px; overflow:hidden; background:#fff;
+           box-shadow:0 1px 3px rgba(0,0,0,.07), 0 10px 30px rgba(0,0,0,.05); }
+
+  .top { font-size:12px; }
+  .bar { height:3px; margin:12px 0 20px; }
+  .bar i { display:block; height:100%; }
+  h2 { margin:0 0 14px; }
+  p { margin:12px 0; }
+  pre { margin:12px 0; overflow-x:auto; }
+  pre code { background:none; padding:0; font-size:inherit; color:inherit; }
+  .q { margin:20px 0 12px; }
+  .opts { display:flex; flex-direction:column; gap:8px; }
+  .fb { margin-top:16px; }
+  .next { margin-top:18px; display:inline-block; }
+
+  /* ---------- Material You ---------- */
+  .m3 { background:#FEF7FF; color:#1D1B20; border-radius:26px; padding:20px;
+        font-family:"Roboto","Noto Sans SC",system-ui,sans-serif; }
+  .m3 .top { color:#49454F; }
+  .m3 .bar { background:#E8DEF8; border-radius:2px; }
+  .m3 .bar i { background:#6750A4; border-radius:2px; }
+  .m3 h2 { font-size:22px; font-weight:500; line-height:1.35; }
+  .m3 p { font-size:14px; line-height:1.65; color:#49454F; }
+  .m3 code { background:#E8DEF8; color:#21005D; border-radius:6px; padding:2px 6px;
+             font-family:"Roboto Mono",ui-monospace,monospace; font-size:12.5px; }
+  .m3 pre { background:#F3EDF7; border-radius:16px; padding:14px 16px;
+            font-family:"Roboto Mono",ui-monospace,monospace; font-size:12.5px; line-height:1.65; color:#1D1B20; }
+  .m3 .q { background:#EADDFF; color:#21005D; border-radius:16px; padding:14px 16px; font-size:14px; line-height:1.6; }
+  .m3 .q code { background:#D0BCFF; color:#21005D; }
+  .m3 .opt { border:1px solid #79747E; border-radius:100px; padding:12px 18px; font-size:14px; color:#1D1B20; }
+  .m3 .opt.correct { background:#E8DEF8; border-color:#6750A4; color:#21005D; font-weight:500; }
+  .m3 .fb { background:#DCEFE4; color:#0B3D2C; border-radius:16px; padding:14px 16px; font-size:13.5px; line-height:1.6; }
+  .m3 .next { background:#6750A4; color:#fff; border-radius:100px; padding:12px 26px; font-size:14px; font-weight:500; }
+  .m3 .kw { color:#7C4DFF; } .m3 .str { color:#0A7A5A; } .m3 .num { color:#B45309; } .m3 .cmt { color:#79747E; font-style:italic; }
+
+  /* ---------- Apple ---------- */
+  .ios { background:#F2F2F7; color:#000; border-radius:26px; padding:20px 16px;
+         font-family:-apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif; }
+  .ios .top { color:#8E8E93; letter-spacing:.05em; text-transform:uppercase; font-size:11.5px; }
+  .ios .bar { background:#E5E5EA; border-radius:2px; }
+  .ios .bar i { background:#007AFF; border-radius:2px; }
+  .ios h2 { font-size:25px; font-weight:700; line-height:1.2; letter-spacing:-.022em; }
+  .ios p { font-size:15.5px; line-height:1.52; color:#3C3C43; }
+  .ios code { background:#E5E5EA; color:#1C1C1E; border-radius:4px; padding:1px 5px;
+              font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:13px; }
+  .ios pre { background:#fff; border:1px solid #E5E5EA; border-radius:12px; padding:14px;
+             font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; line-height:1.6; color:#1C1C1E; }
+  .ios .q { font-size:15.5px; font-weight:600; line-height:1.45; }
+  .ios .opts { gap:0; background:#fff; border-radius:12px; overflow:hidden; }
+  .ios .opt { position:relative; padding:13px 34px 13px 16px; font-size:15px; color:#007AFF;
+              border-top:1px solid rgba(60,60,67,.16); }
+  .ios .opt:first-child { border-top:none; }
+  .ios .opt::after { content:"›"; position:absolute; right:14px; top:50%; transform:translateY(-50%);
+                     color:#C7C7CC; font-size:18px; }
+  .ios .opt.correct { color:#000; font-weight:500; }
+  .ios .opt.correct::after { content:"✓"; color:#34C759; font-size:16px; }
+  .ios .fb { background:rgba(52,199,89,.12); color:#1B7A34; border-radius:12px; padding:13px 14px;
+             font-size:14px; line-height:1.5; }
+  .ios .next { background:#007AFF; color:#fff; border-radius:12px; padding:13px; width:100%;
+               text-align:center; font-size:16px; font-weight:600; }
+  .ios .kw { color:#AD3DA4; } .ios .str { color:#C41A16; } .ios .num { color:#1C00CF; } .ios .cmt { color:#8E8E93; }
+
+  /* ---------- Metro / Fluent ---------- */
+  .metro { background:#fff; color:#201F1E; border-radius:0; padding:22px 20px;
+           font-family:"Segoe UI","PingFang SC",Inter,sans-serif; border:1px solid #EDEBE9; }
+  .metro .top { color:#605E5C; text-transform:uppercase; letter-spacing:.09em; font-size:11px; }
+  .metro .bar { background:#EDEBE9; height:2px; }
+  .metro .bar i { background:#0078D4; }
+  .metro h2 { font-size:27px; font-weight:300; line-height:1.25; letter-spacing:-.015em;
+              border-left:6px solid #0078D4; padding-left:13px; }
+  .metro p { font-size:14px; line-height:1.6; color:#323130; }
+  .metro code { background:#F3F2F1; color:#201F1E; padding:1px 5px; font-family:Consolas,ui-monospace,monospace; font-size:13px; }
+  .metro pre { background:#FAF9F8; border:1px solid #EDEBE9; padding:13px 15px;
+               font-family:Consolas,ui-monospace,monospace; font-size:12.5px; line-height:1.62; color:#201F1E; }
+  .metro .q { font-size:15.5px; font-weight:600; color:#201F1E; }
+  .metro .opt { background:#FAF9F8; border:1px solid #EDEBE9; padding:12px 14px; font-size:14px; }
+  .metro .opt.correct { background:#0078D4; border-color:#0078D4; color:#fff; }
+  .metro .fb { background:#EFF6FC; border-left:3px solid #0078D4; padding:11px 13px; font-size:13.5px; line-height:1.6; color:#201F1E; }
+  .metro .next { background:#0078D4; color:#fff; padding:11px 24px; font-size:14px; font-weight:600; }
+  .metro .kw { color:#0000FF; } .metro .str { color:#A31515; } .metro .num { color:#098658; } .metro .cmt { color:#008000; }
+
+  /* ---------- Print / Editorial ---------- */
+  .print { background:#fff; color:#1f2937; border-radius:8px; padding:26px 24px;
+           font-family:"Microsoft YaHei","PingFang SC",sans-serif; border:1px solid #E5E7EB; }
+  .print .top { color:#6B7280; font-size:11.5px; letter-spacing:.04em; }
+  .print .bar { background:#E5E7EB; }
+  .print .bar i { background:#2563EB; }
+  .print h2 { font-size:17px; font-weight:700; color:#1e40af; border-left:5px solid #2563eb;
+              padding-left:11px; line-height:1.45; }
+  .print p { font-size:14px; line-height:1.72; text-align:justify; margin:10px 0; }
+  .print code { background:#eef2f8; color:#0f172a; border-radius:4px; padding:1px 5px;
+                font-family:Consolas,"Cascadia Mono",monospace; font-size:13px; }
+  .print pre { background:#f6f8fb; border:1px solid #dbe3ee; border-radius:8px;
+               padding:11px 14px; font-family:Consolas,"Cascadia Mono",monospace;
+               font-size:12.5px; line-height:1.62; color:#1f2937; }
+  .print .q { background:#eff6ff; border-left:5px solid #2563eb; padding:11px 14px;
+              font-size:14px; line-height:1.65; color:#1e3a8a; }
+  .print .q code { background:#dbeafe; color:#1e3a8a; }
+  .print .opt { border:1px solid #cbd5e1; border-radius:4px; padding:9px 13px; font-size:13.5px; color:#1f2937; }
+  .print .opt.correct { background:#eff6ff; border-color:#2563eb; color:#1e3a8a; font-weight:600; }
+  .print .fb { background:#fffbeb; border-left:5px solid #f59e0b; color:#57534e;
+               border-radius:0 8px 8px 0; padding:11px 14px; font-size:13.5px; line-height:1.68; }
+  .print .next { background:#2563eb; color:#fff; border-radius:4px; padding:9px 22px; font-size:13.5px; font-weight:600; }
+  .print .kw { color:#7c3aed; font-weight:bold; } .print .str { color:#047857; }
+  .print .num { color:#b45309; } .print .cmt { color:#64748b; font-style:italic; }
+
+  /* ---------- Notion / 文档流 ---------- */
+  .notion { background:#fff; color:#37352F; border-radius:10px; padding:22px 20px;
+            font-family:-apple-system,"Segoe UI","PingFang SC",sans-serif; }
+  .notion .top { color:#9B9A97; font-size:12px; }
+  .notion .bar { background:#F1F1EF; height:2px; }
+  .notion .bar i { background:#37352F; }
+  .notion h2 { font-size:23px; font-weight:600; line-height:1.3; }
+  .notion p { font-size:15px; line-height:1.7; }
+  .notion code { background:#F1F1EF; color:#EB5757; border-radius:3px; padding:2px 4px;
+                 font-family:ui-monospace,SFMono-Regular,monospace; font-size:13px; }
+  .notion pre { background:#F7F6F3; border-radius:4px; padding:14px;
+                font-family:ui-monospace,SFMono-Regular,monospace; font-size:12.5px; line-height:1.6; color:#37352F; }
+  .notion .q { background:#F7F6F3; border-radius:4px; padding:12px 14px; font-size:14.5px;
+               font-weight:500; line-height:1.6; }
+  .notion .opts { gap:2px; }
+  .notion .opt { padding:9px 10px; border-radius:4px; font-size:14.5px; color:#37352F; }
+  .notion .opt.correct { background:#DBEDDB; }
+  .notion .fb { border-left:3px solid #0F7B6C; padding-left:12px; font-size:14px; line-height:1.65; }
+  .notion .next { background:#37352F; color:#fff; border-radius:4px; padding:9px 20px; font-size:14px; }
+  .notion .kw { color:#6940A5; } .notion .str { color:#0B6E99; } .notion .num { color:#B45309; } .notion .cmt { color:#9B9A97; }
+
+  footer { max-width:1240px; margin:0 auto; padding:0 40px 60px; font-size:13.5px; line-height:1.7; color:var(--sub); }
+
+  .phone pre code { background:none; padding:0; color:inherit; font-size:inherit; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>五种界面风格</h1>
+  <p>同一段内容（闯关 10-11 第 3 步）在五套体系下的样子。只比较排版节奏、代码块处理与质感，交互都一样。</p>
+</header>
+
+<main class="grid">
+  <section>
+    <div class="label"><b>Material You</b><span>Android 原生，大圆角 + 色调容器</span></div>
+    <div class="phone m3" data-slot></div>
+  </section>
+  <section>
+    <div class="label"><b>Apple</b><span>iOS 分组列表，留白与克制的蓝</span></div>
+    <div class="phone ios" data-slot></div>
+  </section>
+  <section>
+    <div class="label"><b>Metro / Fluent</b><span>直角、细字重、单一强调色</span></div>
+    <div class="phone metro" data-slot></div>
+  </section>
+  <section>
+    <div class="label"><b>Print / Editorial</b><span>对齐你现在的 md2pdf 版式</span></div>
+    <div class="phone print" data-slot></div>
+  </section>
+  <section>
+    <div class="label"><b>文档流</b><span>无卡片，靠字距与灰阶分层</span></div>
+    <div class="phone notion" data-slot></div>
+  </section>
+</main>
+
+<footer>Print 那版最接近你现在打印稿的观感；若要往 App 落，我倾向 Print 的正文排版 + Apple 的外壳。</footer>
+
+<template id="lesson">
+  <div class="top">第 3 步 · 排错</div>
+  <div class="bar"><i style="width:21%"></i></div>
+  <h2>else 后面为什么是 break</h2>
+  <p>看这段分支的收尾：</p>
+  <pre><code><span class="kw">sex</span> = row[<span class="num">0</span>]
+<span class="kw">if</span> sex == <span class="str">'M'</span>:
+    sex_val = <span class="num">1.</span>
+<span class="kw">elif</span> sex == <span class="str">'F'</span>:
+    sex_val = <span class="num">-1.</span>
+<span class="kw">elif</span> sex == <span class="str">'I'</span>:
+    sex_val = <span class="num">0.</span>
+<span class="kw">else</span>:
+    <span class="kw">break</span>        <span class="cmt"># ← 注意这里</span></code></pre>
+  <p><code>break</code> 跳出的不是 <code>if</code>，是整个 <code>for</code> 循环。撞上一行 sex 不是这三个字母，读取就到此为止，后面的行全部作废，而且不报错。</p>
+  <div class="q">文件第 2000 行的 sex 写成了小写 <code>m</code>，程序跑完会读到多少行？</div>
+  <div class="opts">
+    <div class="opt correct">1999 行，而且不会有任何提示</div>
+    <div class="opt">4177 行，m 会被当成 M</div>
+    <div class="opt">直接抛异常，程序停下</div>
+    <div class="opt">2000 行，坏的那行被跳过</div>
+  </div>
+  <div class="fb">对。这类 bug 的危险在于：训练照样跑完、loss 照样下降，只有准确率莫名其妙地低。</div>
+  <div class="next">下一步</div>
+</template>
+
+<script>
+  const tpl = document.getElementById('lesson');
+  document.querySelectorAll('[data-slot]').forEach(function (el) {
+    el.appendChild(tpl.content.cloneNode(true));
+  });
+</script>
+</body>
+</html>

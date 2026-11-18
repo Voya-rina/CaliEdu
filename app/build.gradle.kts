@@ -5,23 +5,49 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.chaquopy)
 }
 
 android {
-    namespace = "com.caliedu.stepedu"
+    namespace = "com.caliedu"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.caliedu.stepedu"
+        applicationId = "com.caliedu"
         minSdk = 31
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.3.0"
+
+        // Chaquopy 17 只提供 64 位运行时；x86_64 是留给模拟器的。
+        // 注意：这里一旦写了 abiFilters，就不能再开 splits.abi（AGP 会判冲突）。
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
+
+    }
+
+    /**
+     * 用 debug keystore 签 release，只是为了拿到一个"能装、体积小"的包自测。
+     * 真要分发必须换成自己的签名，别拿这个上应用商店。
+     */
+    signingConfigs {
+        create("local") {
+            val store = File(System.getProperty("user.home"), ".android/debug.keystore")
+            if (store.exists()) {
+                storeFile = store
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("local")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -33,6 +59,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -43,6 +70,16 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.13"
+        // 只放源码，不预编译 .pyc：调试时改 runner.py 不用全量重建。
+        pyc {
+            src = false
+        }
     }
 }
 
