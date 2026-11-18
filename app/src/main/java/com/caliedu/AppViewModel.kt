@@ -1,6 +1,8 @@
 package com.caliedu
 
 import android.app.Application
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -15,6 +17,8 @@ import com.caliedu.data.ChannelMode
 import com.caliedu.data.LessonRecord
 import com.caliedu.data.LessonStore
 import com.caliedu.data.Mistake
+import com.caliedu.data.PdfLibrary
+import com.caliedu.data.PdfScanner
 import com.caliedu.data.LlmSettings
 import com.caliedu.data.SettingsStore
 import com.caliedu.data.ThemeMode
@@ -26,14 +30,16 @@ import com.caliedu.model.StepContent
 import com.caliedu.sample.SampleLesson
 import com.caliedu.ui.UiStyle
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-enum class Screen { HOME, RECORDS, SETTINGS, STYLE, MODEL, LESSON, PLAY }
+enum class Screen { HOME, RECORDS, SETTINGS, STYLE, MODEL, LIBRARY, LESSON, PLAY }
 
 data class Feedback(val verdict: Verdict, val text: String)
 
@@ -74,6 +80,9 @@ data class UiState(
     val asking: Boolean = false,
     val askPartial: String = "",
     val recordsTab: Int = 0,
+    val textScale: Float = 1f,
+    val library: PdfLibrary = PdfLibrary(),
+    val libraryBusy: Boolean = false,
 ) {
     val stepCount: Int get() = plan?.steps?.size ?: 0
     val brief get() = plan?.steps?.getOrNull(progress.idx)
@@ -109,6 +118,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             store.themeFlow.collect { saved -> state = state.copy(themeMode = saved) }
         }
         viewModelScope.launch {
+            store.scaleFlow.collect { saved -> state = state.copy(textScale = saved) }
+        }
+        viewModelScope.launch {
+            store.libraryFlow.collect { saved -> state = state.copy(library = saved) }
+        }
+        viewModelScope.launch {
             broker.pending.collect { pending -> state = state.copy(relay = pending) }
         }
         refreshRecords()
@@ -119,10 +134,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { store.saveStyle(style) }
     }
 
+    fun setTheme(mode: ThemeMode) {
+        state = state.copy(themeMode = mode)
+        viewModelScope.launch { store.saveTheme(mode) }
+    }
+
     fun cycleTheme() {
-        val next = ThemeMode.next(state.themeMode)
-        state = state.copy(themeMode = next)
-        viewModelScope.launch { store.saveTheme(next) }
+        setTheme(ThemeMode.next(state.themeMode))
+    }
+
+    /** 拖动时只改内存，松手才落盘——否则每一帧都在写 DataStore。 */
+    fun setTextScale(scale: Float) {
+        state = state.copy(textScale = scale.coerceIn(0.9f, 1.4f))
+    }
+
+    fun commitTextScale() {
+        viewModelScope.launch { store.saveScale(state.textScale) }
+    }
+
+    /** 设置页改成边改边存，所以这里不跳页面。 */
+    fun updateSettings(settings: LlmSettings) {
+        state = state.copy(settings = settings)
+        viewModelScope.launch { store.save(settings) }
     }
 
     fun onInput(text: String) {
@@ -166,7 +199,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             true
         }
 
-        Screen.STYLE, Screen.MODEL -> {
+        Screen.STYLE, Screen.MODEL, Screen.LIBRARY -> {
             state = state.copy(screen = Screen.SETTINGS)
             true
         }
@@ -182,6 +215,42 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun saveSettings(settings: LlmSettings) {
         viewModelScope.launch { store.save(settings) }
         state = state.copy(settings = settings, screen = Screen.SETTINGS)
+    }
+
+    // ---------------------------------------------------------------- PDF 资料夹
+
+    fun importFolder(uri: Uri) {
+        val ctx = getApplication<Application>()
+        state = state.copy(libraryBusy = true, error = null)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    // 先拿到持久授权，否则重启后就读不到了
+                    ctx.contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    )
+                    PdfScanner.scan(ctx, uri)
+                }
+            }
+            result.onSuccess { library ->
+                store.saveLibrary(library)
+                state = state.copy(library = library, libraryBusy = false)
+            }.onFailure { e ->
+                state = state.copy(libraryBusy = false, error = "读不了这个文件夹：${e.message ?: e::class.simpleName}")
+            }
+        }
+    }
+
+    fun rescanFolder() {
+        val library = state.library
+        if (!library.picked) return
+        importFolder(Uri.parse(library.treeUri))
+    }
+
+    fun forgetFolder() {
+        state = state.copy(library = PdfLibrary())
+        viewModelScope.launch { store.saveLibrary(PdfLibrary()) }
     }
 
     // ---------------------------------------------------------------- 一课的生命周期

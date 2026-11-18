@@ -21,11 +21,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Cloud
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.caliedu.data.ChannelMode
 import com.caliedu.data.LlmSettings
+import kotlinx.coroutines.delay
 
 private data class Preset(val name: String, val base: String, val model: String)
 
@@ -52,6 +55,10 @@ private val presets = listOf(
     Preset("本机", "http://127.0.0.1:1234/v1", "local-model"),
 )
 
+/**
+ * 设置页改成边改边存：停手 450ms 写一次，返回键再补一次，
+ * 所以没有「保存」按钮。
+ */
 @Composable
 fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: () -> Unit) {
     val skin = LocalSkin.current
@@ -62,6 +69,27 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
     var grade by remember { mutableStateOf(settings.autoGrade) }
     var runCode by remember { mutableStateOf(settings.runCode) }
 
+    fun snapshot() = LlmSettings(
+        baseUrl = base.trim(),
+        model = model.trim(),
+        apiKey = key.trim().ifBlank { settings.apiKey },
+        mode = mode,
+        autoGrade = grade,
+        runCode = runCode,
+    )
+
+    LaunchedEffect(base, model, key, mode, grade, runCode) {
+        val untouched = key.isBlank() &&
+            base == settings.baseUrl &&
+            model == settings.model &&
+            mode == settings.mode &&
+            grade == settings.autoGrade &&
+            runCode == settings.runCode
+        if (untouched) return@LaunchedEffect
+        delay(450)
+        onSave(snapshot())
+    }
+
     Column(
         Modifier
             .fillMaxSize()
@@ -69,14 +97,23 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
             .padding(horizontal = 22.dp)
     ) {
         Spacer(Modifier.height(8.dp))
-        PageHeader("模型", onBack)
+        PageHeader("模型", onBack = {
+            onSave(snapshot())
+            onBack()
+        })
+        Text(
+            "改动自动保存，不用点保存",
+            fontSize = 11.5.sp,
+            color = skin.sub,
+            modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+        )
 
         Column(
             Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState())
         ) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(16.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ModeCard(
@@ -102,7 +139,11 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                         Box(
                             Modifier
                                 .background(skin.codeBg, RoundedCornerShape(6.dp))
-                                .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp, skin.line, RoundedCornerShape(6.dp))
+                                .border(
+                                    if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp,
+                                    skin.line,
+                                    RoundedCornerShape(6.dp),
+                                )
                                 .clickable {
                                     base = preset.base
                                     model = preset.model
@@ -123,23 +164,33 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                     label = "Key",
                     value = key,
                     password = true,
-                    placeholder = if (settings.apiKey.isNotBlank()) "已保存，留空则不修改" else "sk-…",
+                    placeholder = if (settings.apiKey.isNotBlank()) "已保存，留空就不改" else "sk-…",
                 ) { key = it }
 
                 Spacer(Modifier.height(10.dp))
-                Text("Key 只存在这台手机上，不经过任何服务器。", fontSize = 11.5.sp, lineHeight = 18.sp, color = skin.sub)
-            } else {
-                Spacer(Modifier.height(16.dp))
                 Text(
-                    "不用填 Key。拆题时会把整段提示词给你，贴给任何模型，再把 JSON 粘回来。",
-                    fontSize = skin.smallSize,
-                    lineHeight = 21.sp,
+                    "Key 只存在这台手机上，不经过任何服务器。",
+                    fontSize = 11.5.sp,
+                    lineHeight = 18.sp,
                     color = skin.sub,
                 )
-                Spacer(Modifier.height(12.dp))
-                Field("地址（直连用，可留空）", base) { base = it }
-                Spacer(Modifier.height(10.dp))
-                Field("模型（直连用，可留空）", model) { model = it }
+                if (settings.apiKey.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "清除已存的 Key",
+                        fontSize = 11.5.sp,
+                        color = skin.wrong,
+                        modifier = Modifier
+                            .clickable {
+                                key = ""
+                                onSave(snapshot().copy(apiKey = ""))
+                            }
+                            .padding(vertical = 2.dp),
+                    )
+                }
+            } else {
+                Spacer(Modifier.height(18.dp))
+                RelayNotes(skin)
             }
 
             Spacer(Modifier.height(20.dp))
@@ -158,31 +209,53 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                 enabled = true,
                 onChange = { runCode = it },
             )
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(28.dp))
         }
+    }
+}
 
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .background(skin.accent, RoundedCornerShape(if (skin.pillChoices) 100.dp else skin.radiusCard))
-                .clickable {
-                    onSave(
-                        LlmSettings(
-                            baseUrl = base.trim(),
-                            model = model.trim(),
-                            apiKey = key.trim().ifBlank { settings.apiKey },
-                            mode = mode,
-                            autoGrade = grade,
-                            runCode = runCode,
-                        )
-                    )
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("保存", fontSize = skin.bodySize, color = skin.onAccent)
+/** 接力模式不需要任何 Key，这段把流程讲清楚就够。 */
+@Composable
+private fun RelayNotes(skin: Skin) {
+    val shape = RoundedCornerShape(skin.radiusCard)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(skin.surface, shape)
+            .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp, skin.line, shape)
+            .padding(15.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.Lock, contentDescription = null, tint = skin.accent, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("不用填 Key，也不用联网", fontSize = skin.smallSize, fontWeight = FontWeight.Medium, color = skin.text)
         }
-        Spacer(Modifier.height(14.dp))
+        listOf(
+            "拆题时把整段提示词给你，复制走。",
+            "贴给任意模型（网页版也行），拿到 JSON。",
+            "粘回 App，自动接着往下走。",
+        ).forEachIndexed { index, line ->
+            Row {
+                Text(
+                    "${index + 1}",
+                    fontSize = 11.sp,
+                    color = skin.onAccent,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .background(skin.accent, RoundedCornerShape(8.dp))
+                        .padding(horizontal = 6.dp, vertical = 1.dp),
+                )
+                Spacer(Modifier.width(9.dp))
+                Text(line, fontSize = skin.smallSize, lineHeight = 21.sp, color = skin.sub)
+            }
+        }
+        Text(
+            "地址和模型只在直连时用到，这里不需要填。",
+            fontSize = 11.sp,
+            lineHeight = 17.sp,
+            color = skin.sub,
+        )
     }
 }
 
@@ -265,7 +338,11 @@ private fun Field(
             Modifier
                 .fillMaxWidth()
                 .background(skin.codeBg, RoundedCornerShape(skin.radiusBlock))
-                .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp, skin.line, RoundedCornerShape(skin.radiusBlock))
+                .border(
+                    if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp,
+                    skin.line,
+                    RoundedCornerShape(skin.radiusBlock),
+                )
                 .padding(horizontal = 13.dp, vertical = 12.dp)
         ) {
             if (value.isEmpty() && placeholder.isNotEmpty()) {

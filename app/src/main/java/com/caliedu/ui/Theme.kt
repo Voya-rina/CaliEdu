@@ -288,9 +288,29 @@ fun skinOf(style: UiStyle, dark: Boolean = false): Skin = when (style) {
 
 val LocalSkin = staticCompositionLocalOf { PrintSkin }
 
+/**
+ * 只放大"读的字"，不动容器半径和留白——否则整页会像被放大镜压过。
+ * [scale] 取 0.9~1.4，1.0 是设计稿原尺寸。
+ */
+fun Skin.scaled(scale: Float): Skin {
+    if (scale == 1f) return this
+    return copy(
+        bodySize = (bodySize.value * scale).sp,
+        bodyLine = (bodyLine.value * scale).sp,
+        smallSize = (smallSize.value * scale.coerceAtMost(1.2f)).sp,
+        stepTitleSize = (stepTitleSize.value * scale).sp,
+        heroSize = (heroSize.value * scale.coerceAtMost(1.15f)).sp,
+    )
+}
+
 @Composable
-fun CaliTheme(style: UiStyle, dark: Boolean = false, content: @Composable () -> Unit) {
-    val skin = remember(style, dark) { skinOf(style, dark) }
+fun CaliTheme(
+    style: UiStyle,
+    dark: Boolean = false,
+    textScale: Float = 1f,
+    content: @Composable () -> Unit,
+) {
+    val skin = remember(style, dark, textScale) { skinOf(style, dark).scaled(textScale) }
     val scheme = remember(skin, dark) {
         if (dark) darkColorScheme(
             primary = skin.accent,

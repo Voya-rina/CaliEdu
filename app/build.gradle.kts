@@ -16,8 +16,8 @@ android {
         applicationId = "com.caliedu"
         minSdk = 31
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
 
         // Chaquopy 17 只提供 64 位运行时；x86_64 是留给模拟器的。
         // 注意：这里一旦写了 abiFilters，就不能再开 splits.abi（AGP 会判冲突）。
@@ -96,6 +96,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // 页面切换与分段控件的动画（版本由 Compose BOM 统一管）
+    implementation("androidx.compose.animation:animation")
     implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
 

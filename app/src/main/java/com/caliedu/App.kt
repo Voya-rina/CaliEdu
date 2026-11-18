@@ -4,9 +4,17 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,18 +37,18 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.ui.platform.LocalView
-import androidx.core.view.WindowCompat
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.caliedu.core.LessonDoc
 import com.caliedu.ui.CaliTheme
@@ -48,10 +56,10 @@ import com.caliedu.ui.ExportKind
 import com.caliedu.ui.Exporter
 import com.caliedu.ui.HomeScreen
 import com.caliedu.ui.LessonScreen
+import com.caliedu.ui.LibraryScreen
 import com.caliedu.ui.LocalSkin
 import com.caliedu.ui.ModelScreen
 import com.caliedu.ui.PlayScreen
-import com.caliedu.ui.ReadingView
 import com.caliedu.ui.RecordsScreen
 import com.caliedu.ui.RelayScreen
 import com.caliedu.ui.SettingsHome
@@ -84,7 +92,7 @@ fun CaliEduApp(
         controller.isAppearanceLightStatusBars = !dark
         controller.isAppearanceLightNavigationBars = !dark
     }
-    CaliTheme(state.style, dark) {
+    CaliTheme(state.style, dark, state.textScale) {
         val skin = LocalSkin.current
         val docked = state.screen == Screen.HOME || state.screen == Screen.RECORDS || state.screen == Screen.SETTINGS
         val relay = state.relay
@@ -100,98 +108,128 @@ fun CaliEduApp(
                 .windowInsetsPadding(WindowInsets.systemBars)
         ) {
             Box(Modifier.weight(1f)) {
-                when (state.screen) {
-                    Screen.HOME -> HomeScreen(
-                        state = state,
-                        onInput = vm::onInput,
-                        onStart = vm::start,
-                        onSample = vm::startSample,
-                        onResume = vm::openRecord,
-                        onMistakes = { vm.goRecords(1) },
-                    )
+                // 进二级页从右侧推进来，回退还出去；同级之间只淡入淡出。
+                AnimatedContent(
+                    targetState = state.screen,
+                    transitionSpec = {
+                        val back = depthOf(initialState) > depthOf(targetState)
+                        val forward = depthOf(targetState) > depthOf(initialState)
+                        when {
+                            forward -> (slideInHorizontally(tween(280)) { it / 5 } + fadeIn(tween(200)))
+                                .togetherWith(slideOutHorizontally(tween(280)) { -it / 10 } + fadeOut(tween(140)))
 
-                    Screen.RECORDS -> RecordsScreen(
-                        records = state.records,
-                        tab = state.recordsTab,
-                        onTab = vm::setRecordsTab,
-                        onOpen = vm::openRecord,
-                        onOpenMistake = vm::openAt,
-                        onDelete = vm::deleteRecord,
-                        onStart = { vm.go(Screen.HOME) },
-                        onClear = vm::clearRecords,
-                    )
+                            back -> (slideInHorizontally(tween(280)) { -it / 10 } + fadeIn(tween(200)))
+                                .togetherWith(slideOutHorizontally(tween(280)) { it / 5 } + fadeOut(tween(140)))
 
-                    Screen.SETTINGS -> SettingsHome(
-                        state = state,
-                        onStyle = { vm.go(Screen.STYLE) },
-                        onModel = { vm.go(Screen.MODEL) },
-                        onClear = vm::clearRecords,
-                        onTheme = vm::cycleTheme,
-                    )
+                            else -> fadeIn(tween(180)).togetherWith(fadeOut(tween(120)))
+                        }
+                    },
+                    label = "screen",
+                ) { screen ->
+                    when (screen) {
+                        Screen.HOME -> HomeScreen(
+                            state = state,
+                            onInput = vm::onInput,
+                            onStart = vm::start,
+                            onSample = vm::startSample,
+                            onResume = vm::openRecord,
+                            onMistakes = { vm.goRecords(1) },
+                        )
 
-                    Screen.STYLE -> StyleScreen(
-                        style = state.style,
-                        dark = dark,
-                        themeMode = state.themeMode,
-                        onPick = vm::setStyle,
-                        onCycleTheme = vm::cycleTheme,
-                        onBack = { vm.back() },
-                    )
+                        Screen.RECORDS -> RecordsScreen(
+                            records = state.records,
+                            tab = state.recordsTab,
+                            onTab = vm::setRecordsTab,
+                            onOpen = vm::openRecord,
+                            onOpenMistake = vm::openAt,
+                            onDelete = vm::deleteRecord,
+                            onStart = { vm.go(Screen.HOME) },
+                            onClear = vm::clearRecords,
+                        )
 
-                    Screen.MODEL -> ModelScreen(
-                        settings = state.settings,
-                        onSave = vm::saveSettings,
-                        onBack = { vm.back() },
-                    )
+                        Screen.SETTINGS -> SettingsHome(
+                            state = state,
+                            onStyle = { vm.go(Screen.STYLE) },
+                            onModel = { vm.go(Screen.MODEL) },
+                            onLibrary = { vm.go(Screen.LIBRARY) },
+                            onClear = vm::clearRecords,
+                            onScale = vm::setTextScale,
+                            onScaleCommit = vm::commitTextScale,
+                        )
 
-                    Screen.LESSON -> LessonScreen(
-                        state = state,
-                        onBack = { vm.back() },
-                        onSubmit = vm::submit,
-                        onDraft = vm::onDraft,
-                        onHint = vm::askHint,
-                        onNext = vm::next,
-                        onToggleReading = vm::toggleReading,
-                        onRetry = { vm.loadStep(state.progress.idx) },
-                        onJump = vm::loadStep,
-                        onAskOpen = vm::openAsk,
-                        onAskClose = vm::closeAsk,
-                        onAskInput = vm::onAskInput,
-                        onAskSend = { vm.ask(state.askInput) },
-                        onGenerate = vm::ensureStep,
-                        onFocusStep = { index ->
-                            vm.toggleReading()
-                            vm.loadStep(index)
-                        },
-                        onExport = { kind ->
-                            when (kind) {
-                                ExportKind.PLAY -> vm.openPlay()
-                                ExportKind.COPY -> {
-                                    val plan = state.plan
-                                    if (plan != null) {
-                                        copyToClipboard(context, LessonDoc.markdown(plan, state.contents))
-                                        vm.toast("全文已复制")
+                        Screen.STYLE -> StyleScreen(
+                            style = state.style,
+                            dark = dark,
+                            themeMode = state.themeMode,
+                            onPick = vm::setStyle,
+                            onTheme = vm::setTheme,
+                            onBack = { vm.back() },
+                        )
+
+                        Screen.MODEL -> ModelScreen(
+                            settings = state.settings,
+                            onSave = vm::updateSettings,
+                            onBack = { vm.back() },
+                        )
+
+                        Screen.LIBRARY -> LibraryScreen(
+                            library = state.library,
+                            busy = state.libraryBusy,
+                            onImport = vm::importFolder,
+                            onRescan = vm::rescanFolder,
+                            onToast = vm::toast,
+                            onBack = { vm.back() },
+                        )
+
+                        Screen.LESSON -> LessonScreen(
+                            state = state,
+                            onBack = { vm.back() },
+                            onSubmit = vm::submit,
+                            onDraft = vm::onDraft,
+                            onHint = vm::askHint,
+                            onNext = vm::next,
+                            onToggleReading = vm::toggleReading,
+                            onRetry = { vm.loadStep(state.progress.idx) },
+                            onJump = vm::loadStep,
+                            onAskOpen = vm::openAsk,
+                            onAskClose = vm::closeAsk,
+                            onAskInput = vm::onAskInput,
+                            onAskSend = { vm.ask(state.askInput) },
+                            onGenerate = vm::ensureStep,
+                            onFocusStep = { index ->
+                                vm.toggleReading()
+                                vm.loadStep(index)
+                            },
+                            onExport = { kind ->
+                                when (kind) {
+                                    ExportKind.PLAY -> vm.openPlay()
+                                    ExportKind.COPY -> {
+                                        val plan = state.plan
+                                        if (plan != null) {
+                                            copyToClipboard(context, LessonDoc.markdown(plan, state.contents))
+                                            vm.toast("全文已复制")
+                                        }
+                                    }
+
+                                    ExportKind.MARKDOWN -> vm.exportMarkdown()?.let {
+                                        runCatching { Exporter.share(context, it, "text/markdown") }
+                                            .onFailure { e -> vm.toast("导出失败：${e.message}") }
+                                    }
+
+                                    ExportKind.PDF -> vm.exportHtml()?.let {
+                                        runCatching { Exporter.print(context, it) }
+                                            .onFailure { e -> vm.toast("打印失败：${e.message}") }
                                     }
                                 }
+                            },
+                        )
 
-                                ExportKind.MARKDOWN -> vm.exportMarkdown()?.let {
-                                    runCatching { Exporter.share(context, it, "text/markdown") }
-                                        .onFailure { e -> vm.toast("导出失败：${e.message}") }
-                                }
-
-                                ExportKind.PDF -> vm.exportHtml()?.let {
-                                    runCatching { Exporter.print(context, it) }
-                                        .onFailure { e -> vm.toast("打印失败：${e.message}") }
-                                }
-                            }
-                        },
-                    )
-
-                    Screen.PLAY -> PlayScreen(
-                        initial = state.playCode,
-                        title = state.plan?.steps?.getOrNull(state.progress.idx)?.title.orEmpty(),
-                        onBack = { vm.back() },
-                    )
+                        Screen.PLAY -> PlayScreen(
+                            initial = state.playCode,
+                            title = state.plan?.steps?.getOrNull(state.progress.idx)?.title.orEmpty(),
+                            onBack = { vm.back() },
+                        )
+                    }
                 }
 
                 if (relay != null) {
@@ -214,6 +252,13 @@ fun CaliEduApp(
         state.error?.let { message -> ErrorBanner(message, vm::dismissError) }
         state.toast?.let { message -> ToastBanner(message, vm::clearToast) }
     }
+}
+
+/** 页面层级：同级淡入淡出，跨级左右滑。 */
+private fun depthOf(screen: Screen): Int = when (screen) {
+    Screen.HOME, Screen.RECORDS, Screen.SETTINGS -> 0
+    Screen.STYLE, Screen.MODEL, Screen.LIBRARY -> 1
+    Screen.LESSON, Screen.PLAY -> 2
 }
 
 private fun copyToClipboard(context: Context, text: String) {
@@ -249,6 +294,11 @@ private fun Dock(current: Screen, onSelect: (Screen) -> Unit) {
                 val icon = entry.second.first
                 val label = entry.second.second
                 val selected = screen == current
+                val lift by androidx.compose.animation.core.animateFloatAsState(
+                    targetValue = if (selected) 1f else 0f,
+                    animationSpec = androidx.compose.animation.core.tween(180),
+                    label = "dock",
+                )
                 Column(
                     Modifier
                         .weight(1f)
@@ -273,7 +323,7 @@ private fun Dock(current: Screen, onSelect: (Screen) -> Unit) {
                             icon,
                             contentDescription = null,
                             tint = if (selected) skin.accent else skin.sub,
-                            modifier = Modifier.size(21.dp),
+                            modifier = Modifier.size((20 + lift * 2).dp),
                         )
                     }
                     Spacer(Modifier.height(3.dp))
@@ -295,7 +345,7 @@ private fun LoadingOverlay(label: String, seconds: Int, onCancel: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(label, fontSize = skin.bodySize * 1.05f, fontWeight = FontWeight.Medium, color = skin.text)
+            Text(label, fontSize = (skin.bodySize.value * 1.05f).sp, fontWeight = FontWeight.Medium, color = skin.text)
             Text(
                 text = if (seconds < 12) "第 $seconds 秒" else "第 $seconds 秒 · 本地模型慢是常态",
                 fontSize = skin.smallSize,
@@ -337,7 +387,7 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
 @Composable
 private fun ToastBanner(message: String, onDone: () -> Unit) {
     val skin = LocalSkin.current
-    androidx.compose.runtime.LaunchedEffect(message) {
+    LaunchedEffect(message) {
         kotlinx.coroutines.delay(1500)
         onDone()
     }

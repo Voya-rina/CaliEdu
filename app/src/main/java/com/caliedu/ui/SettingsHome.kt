@@ -14,34 +14,43 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.DarkMode
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.caliedu.UiState
 import com.caliedu.data.ChannelMode
+import com.caliedu.data.ThemeMode
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsHome(
     state: UiState,
     onStyle: () -> Unit,
     onModel: () -> Unit,
+    onLibrary: () -> Unit,
     onClear: () -> Unit,
-    onTheme: () -> Unit,
+    onScale: (Float) -> Unit,
+    onScaleCommit: () -> Unit,
 ) {
     val skin = LocalSkin.current
 
@@ -52,57 +61,72 @@ fun SettingsHome(
             .padding(horizontal = 22.dp)
     ) {
         Spacer(Modifier.height(14.dp))
-        Text("设置", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = skin.text)
+        Text("设置", fontSize = (skin.heroSize.value * 0.72f).sp, fontWeight = FontWeight.Bold, color = skin.text)
 
-        Spacer(Modifier.height(22.dp))
-        Group("外观")
-        SettingRow(
-            icon = Icons.Rounded.Palette,
-            title = "风格",
-            trailing = state.style.label,
-            onClick = onStyle,
-        )
-        Spacer(Modifier.height(8.dp))
-        SettingRow(
-            icon = Icons.Rounded.DarkMode,
-            title = "深浅色",
-            trailing = state.themeMode.label,
-            onClick = onTheme,
-        )
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+            Spacer(Modifier.height(22.dp))
+            Group("外观")
+            SettingRow(
+                icon = Icons.Rounded.Palette,
+                title = "风格",
+                trailing = state.style.label,
+                onClick = onStyle,
+            )
+            Spacer(Modifier.height(8.dp))
+            ScaleCard(
+                scale = state.textScale,
+                onChange = onScale,
+                onCommit = onScaleCommit,
+            )
 
-        Spacer(Modifier.height(20.dp))
-        Group("模型")
-        SettingRow(
-            icon = Icons.Rounded.Key,
-            title = "模型与批改",
-            trailing = buildString {
-                append(state.settings.mode.label)
-                if (state.settings.mode == ChannelMode.DIRECT) {
-                    append(if (state.settings.configured) " · 已配置" else " · 未配置")
-                }
-            },
-            accent = state.settings.canTalk,
-            onClick = onModel,
-        )
+            Spacer(Modifier.height(20.dp))
+            Group("模型")
+            SettingRow(
+                icon = Icons.Rounded.Key,
+                title = "模型与批改",
+                trailing = buildString {
+                    append(state.settings.mode.label)
+                    if (state.settings.mode == ChannelMode.DIRECT) {
+                        append(if (state.settings.configured) " · 已配置" else " · 未配置")
+                    }
+                },
+                accent = state.settings.canTalk,
+                onClick = onModel,
+            )
 
-        Spacer(Modifier.height(20.dp))
-        Group("数据")
-        SettingRow(
-            icon = Icons.Rounded.DeleteSweep,
-            title = "清空记录",
-            trailing = "${state.records.size} 条",
-            onClick = if (state.records.isEmpty()) null else onClear,
-        )
+            Spacer(Modifier.height(20.dp))
+            Group("资料")
+            SettingRow(
+                icon = Icons.Rounded.FolderOpen,
+                title = "PDF 资料夹",
+                trailing = if (state.library.picked) {
+                    if (state.libraryBusy) "扫描中…" else "${state.library.items.size} 个"
+                } else {
+                    "未选择"
+                },
+                accent = state.library.items.isNotEmpty(),
+                onClick = onLibrary,
+            )
 
-        Spacer(Modifier.height(20.dp))
-        Group("关于")
-        SettingRow(
-            icon = Icons.Rounded.Info,
-            title = "版本",
-            trailing = com.caliedu.BuildConfig.VERSION_NAME,
-            onClick = null,
-        )
-        Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(20.dp))
+            Group("数据")
+            SettingRow(
+                icon = Icons.Rounded.DeleteSweep,
+                title = "清空记录",
+                trailing = "${state.records.size} 条",
+                onClick = if (state.records.isEmpty()) null else onClear,
+            )
+
+            Spacer(Modifier.height(20.dp))
+            Group("关于")
+            SettingRow(
+                icon = Icons.Rounded.Info,
+                title = "版本",
+                trailing = com.caliedu.BuildConfig.VERSION_NAME,
+                onClick = null,
+            )
+            Spacer(Modifier.height(24.dp))
+        }
     }
 }
 
@@ -161,13 +185,62 @@ private fun SettingRow(
     }
 }
 
+/** 字号放在设置首页直接拖，拖完松手才写盘。 */
+@Composable
+private fun ScaleCard(scale: Float, onChange: (Float) -> Unit, onCommit: () -> Unit) {
+    val skin = LocalSkin.current
+    val shape = RoundedCornerShape(skin.radiusCard)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(skin.surface, shape)
+            .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp, skin.line, shape)
+            .padding(horizontal = 15.dp, vertical = 12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Rounded.FormatSize,
+                contentDescription = null,
+                tint = skin.accent,
+                modifier = Modifier.size(19.dp),
+            )
+            Spacer(Modifier.width(13.dp))
+            Text("字号", fontSize = skin.bodySize, color = skin.text, modifier = Modifier.weight(1f))
+            Text(
+                "${(scale * 100).roundToInt()}%",
+                fontSize = 12.5.sp,
+                color = if (scale > 1.001f) skin.accentDeep else skin.sub,
+            )
+        }
+        Slider(
+            value = scale,
+            onValueChange = onChange,
+            valueRange = 0.9f..1.4f,
+            steps = 9,
+            onValueChangeFinished = onCommit,
+            colors = SliderDefaults.colors(
+                thumbColor = skin.accent,
+                activeTrackColor = skin.accent,
+                inactiveTrackColor = skin.line,
+            ),
+        )
+        Row {
+            Text("小", fontSize = 10.5.sp, color = skin.sub)
+            Spacer(Modifier.weight(1f))
+            Text("大", fontSize = 10.5.sp, color = skin.sub)
+        }
+    }
+}
+
+// ---------------------------------------------------------------- 风格页
+
 @Composable
 fun StyleScreen(
     style: UiStyle,
     dark: Boolean,
-    themeMode: com.caliedu.data.ThemeMode,
+    themeMode: ThemeMode,
     onPick: (UiStyle) -> Unit,
-    onCycleTheme: () -> Unit,
+    onTheme: (ThemeMode) -> Unit,
     onBack: () -> Unit,
 ) {
     val skin = LocalSkin.current
@@ -179,28 +252,28 @@ fun StyleScreen(
     ) {
         Spacer(Modifier.height(10.dp))
         PageHeader("风格", onBack)
+        Text(
+            "选了立刻生效，自动保存",
+            fontSize = 11.5.sp,
+            color = skin.sub,
+            modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+        )
+
         Spacer(Modifier.height(16.dp))
-        Row(
+        Text("深浅色", fontSize = 11.5.sp, letterSpacing = 0.6.sp, color = skin.sub, modifier = Modifier.padding(start = 2.dp, bottom = 8.dp))
+        SegmentedRow(
+            options = listOf("跟随系统", "浅色", "深色"),
+            selected = themeMode.ordinal,
+            onSelect = { index -> onTheme(ThemeMode.entries[index]) },
+        )
+
+        Spacer(Modifier.height(18.dp))
+        Column(
             Modifier
-                .fillMaxWidth()
-                .background(skin.codeBg, RoundedCornerShape(100.dp))
-                .clickable(onClick = onCycleTheme)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Icon(
-                Icons.Rounded.DarkMode,
-                contentDescription = null,
-                tint = skin.accent,
-                modifier = Modifier.size(16.dp),
-            )
-            Spacer(Modifier.width(9.dp))
-            Text("深浅色", fontSize = skin.smallSize, color = skin.text)
-            Spacer(Modifier.weight(1f))
-            Text(themeMode.label, fontSize = 12.sp, color = skin.sub)
-        }
-        Spacer(Modifier.height(16.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             UiStyle.entries.forEach { option ->
                 StyleCard(
                     option = option,
@@ -210,85 +283,140 @@ fun StyleScreen(
                     dark = dark,
                 )
             }
+            Spacer(Modifier.height(20.dp))
         }
-        Spacer(Modifier.height(16.dp))
     }
 }
 
 @Composable
 private fun StyleCard(option: UiStyle, selected: Boolean, onClick: () -> Unit, skin: Skin, dark: Boolean) {
     val shape = RoundedCornerShape(skin.radiusCard)
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
             .background(if (selected) skin.accentSoft else skin.surface, shape)
             .border(if (selected) 1.5.dp else 0.5.dp, if (selected) skin.accent else skin.line, shape)
             .clickable(onClick = onClick)
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .padding(12.dp),
     ) {
-        StylePreview(option, dark)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                option.label,
-                fontSize = skin.bodySize,
-                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                color = if (selected) skin.accentDeep else skin.text,
-            )
-            Text(option.note, fontSize = 11.5.sp, color = skin.sub)
-        }
-        if (selected) {
-            Box(
-                Modifier
-                    .size(18.dp)
-                    .background(skin.accent, RoundedCornerShape(9.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("✓", fontSize = 11.sp, color = skin.onAccent)
+        StylePreviewPage(option, dark)
+        Spacer(Modifier.height(11.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    option.label,
+                    fontSize = skin.bodySize,
+                    fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+                    color = if (selected) skin.accentDeep else skin.text,
+                )
+                Text(option.note, fontSize = 11.5.sp, color = skin.sub)
+            }
+            if (selected) {
+                Box(
+                    Modifier
+                        .size(18.dp)
+                        .background(skin.accent, RoundedCornerShape(9.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", fontSize = 11.sp, color = skin.onAccent)
+                }
             }
         }
     }
 }
 
+/**
+ * 缩略页：不是画几条灰线，而是用那套皮肤真渲染一小段讲义
+ * （标题 + 正文 + 语法高亮代码 + 选项），跟实际学习页同源。
+ */
 @Composable
-private fun StylePreview(option: UiStyle, dark: Boolean) {
+private fun StylePreviewPage(option: UiStyle, dark: Boolean) {
     val s = skinOf(option, dark)
-    val shape = RoundedCornerShape(6.dp)
-    Row(
+    val shape = RoundedCornerShape(if (s.pillChoices) 16.dp else 8.dp)
+    Column(
         Modifier
-            .width(60.dp)
-            .height(44.dp)
+            .fillMaxWidth()
+            .height(154.dp)
             .background(s.bg, shape)
             .border(0.5.dp, s.line, shape)
-            .padding(6.dp)
+            .padding(12.dp)
     ) {
-        Box(
-            Modifier
-                .width(3.dp)
-                .height(32.dp)
-                .background(s.accent, RoundedCornerShape(1.dp))
-        )
-        Spacer(Modifier.width(6.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.weight(1f)) {
-            Box(
-                Modifier
-                    .fillMaxWidth(0.85f)
-                    .height(3.dp)
-                    .background(s.text.copy(alpha = 0.8f), RoundedCornerShape(1.dp))
-            )
-            Box(
-                Modifier
-                    .fillMaxWidth(0.6f)
-                    .height(3.dp)
-                    .background(s.sub.copy(alpha = 0.55f), RoundedCornerShape(1.dp))
-            )
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(10.dp)
-                    .background(s.codeBg, RoundedCornerShape(2.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (s.sectionBar) {
+                Box(
+                    Modifier
+                        .width(3.dp)
+                        .height(12.dp)
+                        .background(s.accent, RoundedCornerShape(1.dp))
+                )
+                Spacer(Modifier.width(6.dp))
+            }
+            Text(
+                "第 3 步 · else 后面为什么是 break",
+                fontSize = 7.5.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (s.style == UiStyle.PRINT) s.accentDeep else s.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "缩进层级决定这行 break 挂在哪层循环上，写错就只跳出 if。",
+            fontSize = 6.5.sp,
+            lineHeight = 9.5.sp,
+            color = s.text.copy(alpha = 0.85f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Spacer(Modifier.height(8.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(s.codeBg, RoundedCornerShape(4.dp))
+                .border(if (s.codeBorder.alpha > 0f) 0.5.dp else 0.dp, s.codeBorder, RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+        ) {
+            Text(
+                text = CodeHi.highlight(
+                    "for row in rows:\n    if row[0] == 0:\n        break  # 只跳 if",
+                    "python",
+                    s,
+                ),
+                fontFamily = s.mono,
+                fontSize = 5.8.sp,
+                lineHeight = 8.sp,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            OptionPill(s, "只跳出 if", true)
+            OptionPill(s, "跳出整个 for", false)
+        }
     }
+}
+
+@Composable
+private fun OptionPill(s: Skin, label: String, correct: Boolean) {
+    val shape = RoundedCornerShape(s.radiusChoice)
+    val bg = when {
+        correct && s.filledCorrect -> s.accent
+        correct -> s.accentSoft
+        else -> s.surface
+    }
+    val fg = when {
+        correct && s.filledCorrect -> s.onAccent
+        correct -> s.accentDeep
+        else -> s.sub
+    }
+    Text(
+        label,
+        fontSize = 6.sp,
+        color = fg,
+        maxLines = 1,
+        modifier = Modifier
+            .background(bg, shape)
+            .border(0.5.dp, if (correct) s.accent else s.line, shape)
+            .padding(horizontal = 7.dp, vertical = 3.dp),
+    )
 }

@@ -5,12 +5,15 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.caliedu.ui.UiStyle
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /** 模型怎么接：直连（填 Key）或手动接力（复制提示词、粘回 JSON）。 */
 enum class ChannelMode(val key: String, val label: String, val note: String) {
@@ -65,6 +68,8 @@ class SettingsStore(private val context: Context) {
     private val keyGrade = booleanPreferencesKey("auto_grade")
     private val keyRun = booleanPreferencesKey("run_code")
     private val keyTheme = stringPreferencesKey("theme_mode")
+    private val keyScale = floatPreferencesKey("text_scale")
+    private val keyLibrary = stringPreferencesKey("pdf_library")
 
     val flow: Flow<LlmSettings> = context.dataStore.data.map { p ->
         val base = LlmSettings()
@@ -81,6 +86,15 @@ class SettingsStore(private val context: Context) {
     val styleFlow: Flow<UiStyle> = context.dataStore.data.map { p -> UiStyle.of(p[keyStyle]) }
 
     val themeFlow: Flow<ThemeMode> = context.dataStore.data.map { p -> ThemeMode.of(p[keyTheme]) }
+
+    val scaleFlow: Flow<Float> = context.dataStore.data.map { p -> (p[keyScale] ?: 1f).coerceIn(0.9f, 1.4f) }
+
+    val libraryFlow: Flow<PdfLibrary> = context.dataStore.data.map { p ->
+        val raw = p[keyLibrary]
+        if (raw.isNullOrBlank()) PdfLibrary() else runCatching {
+            Json { ignoreUnknownKeys = true }.decodeFromString<PdfLibrary>(raw)
+        }.getOrDefault(PdfLibrary())
+    }
 
     suspend fun current(): LlmSettings = flow.first()
 
@@ -103,5 +117,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun saveTheme(mode: ThemeMode) {
         context.dataStore.edit { p -> p[keyTheme] = mode.key }
+    }
+
+    suspend fun saveScale(scale: Float) {
+        context.dataStore.edit { p -> p[keyScale] = scale }
+    }
+
+    suspend fun saveLibrary(library: PdfLibrary) {
+        context.dataStore.edit { p -> p[keyLibrary] = Json.encodeToString(library) }
     }
 }
