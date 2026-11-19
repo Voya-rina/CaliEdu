@@ -6,13 +6,30 @@ enum class Verdict { CORRECT, PARTIAL, WRONG }
 
 object Judge {
 
+    /**
+     * 判分用的归一化。
+     *
+     * 数学答案的写法太多：2^n / 2ⁿ / 2n 是同一个东西，x−1 里的减号可能是 U+2212 而不是 ASCII。
+     * 这里把符号折成统一形态，再只留字母、数字和 + - . / * ——
+     * 加减号必须留着，否则 `x+1` 和 `x-1` 会归一成同一个串。
+     */
     fun normalize(raw: String): String {
         val sb = StringBuilder(raw.length)
         for (ch in raw) {
-            val c = if (ch.code in 0xFF01..0xFF5E) (ch.code - 0xFEE0).toChar() else ch
+            val c = when (ch) {
+                '−', '–', '—', '﹣' -> '-'
+                '＋' -> '+'
+                '×', '·', '⋅', '＊' -> '*'
+                '÷' -> '/'
+                '⁰' -> '0'; '¹' -> '1'; '²' -> '2'; '³' -> '3'; '⁴' -> '4'
+                '⁵' -> '5'; '⁶' -> '6'; '⁷' -> '7'; '⁸' -> '8'; '⁹' -> '9'
+                'ⁿ' -> 'n'
+                in '\uFF01'..'\uFF5E' -> (ch.code - 0xFEE0).toChar()
+                else -> ch
+            }
             when {
                 c.isLetterOrDigit() -> sb.append(c.lowercaseChar())
-                c == '.' || c == '/' -> sb.append(c)
+                c == '.' || c == '/' || c == '-' || c == '+' || c == '*' -> sb.append(c)
             }
         }
         return sb.toString()

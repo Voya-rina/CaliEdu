@@ -28,7 +28,7 @@ class RelayTest {
         val job = async { generator.analyze(relaySettings, "写一个冒泡排序") }
 
         val pending = broker.pending.first { it != null }!!
-        assertTrue(pending.packet.contains("拆解规则"))
+        assertTrue(pending.packet.contains("能独立判对错的关口"))
         assertEquals("拆题", pending.label)
 
         broker.submit(

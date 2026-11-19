@@ -7,6 +7,8 @@ data class LessonPlan(
     val title: String = "",
     val kind: String = "general",
     val oneLine: String = "",
+    /** 分类标签：学科 / 章节级，两三个，用来在记录页筛选。knowledge 是具体知识点。 */
+    val tags: List<String> = emptyList(),
     val knowledge: List<String> = emptyList(),
     val steps: List<StepBrief> = emptyList(),
     val needsRun: Boolean = false,

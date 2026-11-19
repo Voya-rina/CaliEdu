@@ -26,9 +26,20 @@ data class LessonRecord(
     val wrongs: Int = 0,
     val finished: Boolean = false,
     val mistakes: List<Mistake> = emptyList(),
+    /**
+     * 已经过关的步号（从 0 起）。
+     *
+     * 没有它就只能靠 cursor 表示进度，于是「翻回第 3 步看一眼」之后再往前走，
+     * 第 4~10 步全都要重答一遍。旧记录这个字段是空的，打开时按 cursor 补一次。
+     */
+    val passed: List<Int> = emptyList(),
 ) {
     val total: Int get() = plan.steps.size
-    val ratio: Float get() = if (total <= 0) 0f else (cursor.toFloat() / total).coerceIn(0f, 1f)
+    val ratio: Float get() = when {
+        total <= 0 -> 0f
+        passed.isNotEmpty() -> passed.size.toFloat() / total
+        else -> cursor.toFloat() / total
+    }.coerceIn(0f, 1f)
     val headline: String get() = title.ifBlank { plan.title.ifBlank { "未命名" } }
 }
 
@@ -44,6 +55,12 @@ data class Mistake(
     val input: String = "",
     val answer: String = "",
     val at: Long = 0L,
+    /** 事后在同一步答对过一次，就算订正。旧记录反序列化时默认 false。 */
+    val fixed: Boolean = false,
+    /** 已经复习过几轮，决定下次隔几天再来。 */
+    val reviews: Int = 0,
+    /** 下次该重做的时间戳；0 表示按 at + 间隔现算。 */
+    val dueAt: Long = 0L,
 )
 
 /** 记录页顶部的汇总。全部由本地记录算出来，不联网。 */
@@ -54,11 +71,19 @@ data class StudyStats(
     val wrongs: Int = 0,
     val streakDays: Int = 0,
     val weak: List<WeakPoint> = emptyList(),
+    val mastery: List<Mastery> = emptyList(),
+    val due: Int = 0,
 ) {
     val accuracy: Float get() = if (solved + wrongs == 0) 0f else solved.toFloat() / (solved + wrongs)
 }
 
 data class WeakPoint(val name: String, val wrongs: Int)
+
+/** 一个知识点的掌握度。分母是这一课的总答题数，按知识点平摊。 */
+data class Mastery(val name: String, val solved: Int, val wrongs: Int) {
+    val total: Int get() = solved + wrongs
+    val ratio: Float get() = if (total == 0) 0f else solved.toFloat() / total
+}
 
 object Stats {
 
@@ -69,12 +94,24 @@ object Stats {
 
         // 每个知识点的错题数：把一课的错按它的知识点平摊，够用且不会夸大。
         val weak = mutableMapOf<String, Int>()
+        val rightByTag = mutableMapOf<String, Int>()
         records.forEach { record ->
             val tags = record.plan.knowledge.filter { it.isNotBlank() }
-            if (tags.isEmpty() || record.wrongs == 0) return@forEach
-            val each = record.wrongs.toFloat() / tags.size
-            tags.forEach { tag -> weak[tag] = (weak[tag] ?: 0) + Math.round(each) }
+            if (tags.isEmpty()) return@forEach
+            val share = 1f / tags.size
+            tags.forEach { tag ->
+                rightByTag[tag] = (rightByTag[tag] ?: 0) + Math.round(record.solved * share)
+                if (record.wrongs > 0) {
+                    weak[tag] = (weak[tag] ?: 0) + Math.round(record.wrongs * share)
+                }
+            }
         }
+
+        val mastery = rightByTag.keys.map { tag ->
+            Mastery(tag, rightByTag[tag] ?: 0, weak[tag] ?: 0)
+        }.filter { it.total >= 2 }
+            .sortedBy { it.ratio }
+            .take(5)
 
         return StudyStats(
             lessons = records.size,
@@ -82,11 +119,13 @@ object Stats {
             solved = solved,
             wrongs = wrongs,
             streakDays = streak(records.map { it.updatedAt }),
+            due = Review.dueCount(records),
             weak = weak.entries
                 .filter { it.value > 0 }
                 .sortedByDescending { it.value }
                 .take(3)
                 .map { WeakPoint(it.key, it.value) },
+            mastery = mastery,
         )
     }
 

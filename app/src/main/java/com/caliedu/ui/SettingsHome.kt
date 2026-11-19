@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -30,8 +31,13 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +59,7 @@ fun SettingsHome(
     onScaleCommit: () -> Unit,
 ) {
     val skin = LocalSkin.current
+    var confirmClear by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -98,7 +105,7 @@ fun SettingsHome(
             Group("资料")
             SettingRow(
                 icon = Icons.Rounded.FolderOpen,
-                title = "PDF 资料夹",
+                title = "资料夹",
                 trailing = if (state.library.picked) {
                     if (state.libraryBusy) "扫描中…" else "${state.library.items.size} 个"
                 } else {
@@ -114,7 +121,7 @@ fun SettingsHome(
                 icon = Icons.Rounded.DeleteSweep,
                 title = "清空记录",
                 trailing = "${state.records.size} 条",
-                onClick = if (state.records.isEmpty()) null else onClear,
+                onClick = if (state.records.isEmpty()) null else ({ confirmClear = true }),
             )
 
             Spacer(Modifier.height(20.dp))
@@ -128,6 +135,19 @@ fun SettingsHome(
             Spacer(Modifier.height(24.dp))
         }
     }
+
+    if (confirmClear) {
+        ConfirmDialog(
+            title = "清空所有记录",
+            message = "课程、错题本、答题统计会一起删掉，删完找不回来。",
+            confirmText = "全部清空",
+            onConfirm = {
+                confirmClear = false
+                onClear()
+            },
+            onDismiss = { confirmClear = false },
+        )
+    }
 }
 
 @Composable
@@ -135,7 +155,7 @@ private fun Group(label: String) {
     val skin = LocalSkin.current
     Text(
         label,
-        fontSize = 11.5.sp,
+        fontSize = skin.fs(11.5f),
         letterSpacing = 0.6.sp,
         color = skin.sub,
         modifier = Modifier.padding(start = 2.dp, bottom = 8.dp),
@@ -172,7 +192,7 @@ private fun SettingRow(
             )
             Spacer(Modifier.width(8.dp))
         }
-        Text(trailing, fontSize = 12.5.sp, color = skin.sub)
+        Text(trailing, fontSize = skin.fs(12.5f), color = skin.sub)
         if (onClick != null) {
             Spacer(Modifier.width(4.dp))
             Icon(
@@ -208,7 +228,7 @@ private fun ScaleCard(scale: Float, onChange: (Float) -> Unit, onCommit: () -> U
             Text("字号", fontSize = skin.bodySize, color = skin.text, modifier = Modifier.weight(1f))
             Text(
                 "${(scale * 100).roundToInt()}%",
-                fontSize = 12.5.sp,
+                fontSize = skin.fs(12.5f),
                 color = if (scale > 1.001f) skin.accentDeep else skin.sub,
             )
         }
@@ -225,9 +245,9 @@ private fun ScaleCard(scale: Float, onChange: (Float) -> Unit, onCommit: () -> U
             ),
         )
         Row {
-            Text("小", fontSize = 10.5.sp, color = skin.sub)
+            Text("小", fontSize = skin.fs(10.5f), color = skin.sub)
             Spacer(Modifier.weight(1f))
-            Text("大", fontSize = 10.5.sp, color = skin.sub)
+            Text("大", fontSize = skin.fs(10.5f), color = skin.sub)
         }
     }
 }
@@ -254,13 +274,13 @@ fun StyleScreen(
         PageHeader("风格", onBack)
         Text(
             "选了立刻生效，自动保存",
-            fontSize = 11.5.sp,
+            fontSize = skin.fs(11.5f),
             color = skin.sub,
             modifier = Modifier.padding(start = 2.dp, top = 2.dp),
         )
 
         Spacer(Modifier.height(16.dp))
-        Text("深浅色", fontSize = 11.5.sp, letterSpacing = 0.6.sp, color = skin.sub, modifier = Modifier.padding(start = 2.dp, bottom = 8.dp))
+        Text("深浅色", fontSize = skin.fs(11.5f), letterSpacing = 0.6.sp, color = skin.sub, modifier = Modifier.padding(start = 2.dp, bottom = 8.dp))
         SegmentedRow(
             options = listOf("跟随系统", "浅色", "深色"),
             selected = themeMode.ordinal,
@@ -290,12 +310,17 @@ fun StyleScreen(
 
 @Composable
 private fun StyleCard(option: UiStyle, selected: Boolean, onClick: () -> Unit, skin: Skin, dark: Boolean) {
-    val shape = RoundedCornerShape(skin.radiusCard)
+    // 卡片底色/文字色都取「被预览的那套皮肤」，不是当前皮肤。
+    // 否则会出现外壳是 Material 的近白紫、里面的纸是纯白，两圈颜色对不上。
+    val o = skinOf(option, dark)
+    val shape = RoundedCornerShape(o.radiusCard)
     Column(
         Modifier
             .fillMaxWidth()
-            .background(if (selected) skin.accentSoft else skin.surface, shape)
-            .border(if (selected) 1.5.dp else 0.5.dp, if (selected) skin.accent else skin.line, shape)
+            .clip(shape)
+            .background(o.bg, shape)
+            // 选中环也用这套皮肤自己的主色：否则会是「蓝环套紫卡」，两种配色打架。
+            .border(if (selected) 2.dp else 1.dp, if (selected) o.accent else o.line, shape)
             .clickable(onClick = onClick)
             .padding(12.dp),
     ) {
@@ -307,18 +332,18 @@ private fun StyleCard(option: UiStyle, selected: Boolean, onClick: () -> Unit, s
                     option.label,
                     fontSize = skin.bodySize,
                     fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                    color = if (selected) skin.accentDeep else skin.text,
+                    color = o.text,
                 )
-                Text(option.note, fontSize = 11.5.sp, color = skin.sub)
+                Text(option.note, fontSize = skin.fs(11.5f), color = o.sub)
             }
             if (selected) {
                 Box(
                     Modifier
-                        .size(18.dp)
-                        .background(skin.accent, RoundedCornerShape(9.dp)),
+                        .size(skin.ui(18f))
+                        .background(o.accent, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("✓", fontSize = 11.sp, color = skin.onAccent)
+                    Text("✓", fontSize = skin.fs(11f), color = o.onAccent)
                 }
             }
         }
@@ -337,6 +362,7 @@ private fun StylePreviewPage(option: UiStyle, dark: Boolean) {
         Modifier
             .fillMaxWidth()
             .height(154.dp)
+            .clip(shape)
             .background(s.bg, shape)
             .border(0.5.dp, s.line, shape)
             .padding(12.dp)
@@ -353,7 +379,7 @@ private fun StylePreviewPage(option: UiStyle, dark: Boolean) {
             }
             Text(
                 "第 3 步 · else 后面为什么是 break",
-                fontSize = 7.5.sp,
+                fontSize = s.fs(7.5f),
                 fontWeight = FontWeight.Bold,
                 color = if (s.style == UiStyle.PRINT) s.accentDeep else s.text,
                 maxLines = 1,
@@ -363,8 +389,8 @@ private fun StylePreviewPage(option: UiStyle, dark: Boolean) {
         Spacer(Modifier.height(6.dp))
         Text(
             "缩进层级决定这行 break 挂在哪层循环上，写错就只跳出 if。",
-            fontSize = 6.5.sp,
-            lineHeight = 9.5.sp,
+            fontSize = s.fs(6.5f),
+            lineHeight = s.fs(9.5f),
             color = s.text.copy(alpha = 0.85f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -384,8 +410,8 @@ private fun StylePreviewPage(option: UiStyle, dark: Boolean) {
                     s,
                 ),
                 fontFamily = s.mono,
-                fontSize = 5.8.sp,
-                lineHeight = 8.sp,
+                fontSize = s.fs(5.8f),
+                lineHeight = s.fs(8f),
             )
         }
         Spacer(Modifier.height(8.dp))
@@ -411,7 +437,7 @@ private fun OptionPill(s: Skin, label: String, correct: Boolean) {
     }
     Text(
         label,
-        fontSize = 6.sp,
+        fontSize = s.fs(6f),
         color = fg,
         maxLines = 1,
         modifier = Modifier

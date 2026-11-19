@@ -16,8 +16,8 @@ android {
         applicationId = "com.caliedu"
         minSdk = 31
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.5.0"
 
         // Chaquopy 17 只提供 64 位运行时；x86_64 是留给模拟器的。
         // 注意：这里一旦写了 abiFilters，就不能再开 splits.abi（AGP 会判冲突）。
@@ -76,6 +76,10 @@ kotlin {
 chaquopy {
     defaultConfig {
         version = "3.13"
+        // pypdf 是纯 Python，用来抽 PDF 的文字层（扫码件抽不出，如实报错）。
+        pip {
+            install("pypdf")
+        }
         // 只放源码，不预编译 .pyc：调试时改 runner.py 不用全量重建。
         pyc {
             src = false

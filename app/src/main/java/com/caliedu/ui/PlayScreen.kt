@@ -84,7 +84,7 @@ fun PlayScreen(initial: String, title: String, onBack: () -> Unit) {
                 )
                 Text(
                     if (available) "本机 Python" else "执行器未启用",
-                    fontSize = 11.5.sp,
+                    fontSize = skin.fs(11.5f),
                     color = skin.sub,
                 )
             }
@@ -119,7 +119,7 @@ fun PlayScreen(initial: String, title: String, onBack: () -> Unit) {
                             )
                         }
                         Spacer(Modifier.width(5.dp))
-                        Text(if (running) "跑着" else "运行", fontSize = 12.5.sp, color = skin.onAccent)
+                        Text(if (running) "跑着" else "运行", fontSize = skin.fs(12.5f), color = skin.onAccent)
                     }
                 }
             }
@@ -130,7 +130,7 @@ fun PlayScreen(initial: String, title: String, onBack: () -> Unit) {
             Text(
                 reason + "。这个安装包没有把 Python 编进去，装了带引擎的版本才能在这里真跑。",
                 fontSize = skin.smallSize,
-                lineHeight = 21.sp,
+                lineHeight = skin.fs(21f),
                 color = skin.sub,
                 modifier = Modifier.padding(horizontal = 20.dp),
             )
@@ -151,8 +151,8 @@ fun PlayScreen(initial: String, title: String, onBack: () -> Unit) {
                 onValueChange = { code = it },
                 textStyle = TextStyle(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.5.sp,
-                    lineHeight = 20.sp,
+                    fontSize = skin.fs(12.5f),
+                    lineHeight = skin.fs(20f),
                     color = skin.text,
                 ),
                 cursorBrush = SolidColor(skin.accent),
@@ -176,15 +176,15 @@ fun PlayScreen(initial: String, title: String, onBack: () -> Unit) {
             ) {
                 Text(
                     if (r.ok) "输出 · ${r.ms} ms" else "出错 · ${r.ms} ms",
-                    fontSize = 11.sp,
+                    fontSize = skin.fs(11f),
                     color = if (r.ok) skin.sub else skin.wrong,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     r.output,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 19.sp,
+                    fontSize = skin.fs(12f),
+                    lineHeight = skin.fs(19f),
                     color = if (r.ok) skin.text else skin.wrong,
                     modifier = Modifier
                         .heightIn(max = 220.dp)

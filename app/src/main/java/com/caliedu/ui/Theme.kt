@@ -31,6 +31,9 @@ enum class UiStyle(val key: String, val label: String, val note: String) {
 /**
  * 一套界面语言。正文字号、行距、代码配色取自 md2pdf 的 CSS，
  * 三种风格只在容器形状与色层上分叉。
+ *
+ * [scale] 是用户拖出来的全局字号倍率。所有写死的字号都必须走 [fs]，
+ * 否则调大字之后按钮上那几行小字会原地不动。
  */
 @Immutable
 data class Skin(
@@ -73,7 +76,17 @@ data class Skin(
     val filledCorrect: Boolean,
     val chromeUppercase: Boolean,
     val mono: FontFamily,
-)
+    val scale: Float = 1f,
+) {
+    /** 写死的字号统一过这里：`fontSize = skin.fs(11f)`。 */
+    fun fs(base: Float): TextUnit = (base * scale).sp
+
+    /**
+     * 控件尺寸（圆按钮、图标、胶囊高度）。只跟七成：
+     * 全跟会把布局撑破，不跟又显得字大了壳没大。
+     */
+    fun ui(base: Float): Dp = (base * (1f + (scale - 1f) * 0.7f)).dp
+}
 
 private val PrintSkin = Skin(
     style = UiStyle.PRINT,
@@ -161,8 +174,10 @@ private val AppleSkin = Skin(
 
 private val MaterialSkin = Skin(
     style = UiStyle.MATERIAL,
-    bg = Color(0xFFFEF7FF),
-    surface = Color(0xFFFDF8FD),
+    // 底色用 surfaceContainerLow、卡片用 surface：两者原来几乎同色，
+    // 卡片只剩一圈描边，看起来像「颜色没对齐」。Material 3 本来就是这么分层的。
+    bg = Color(0xFFF7F2FA),
+    surface = Color(0xFFFEF7FF),
     text = Color(0xFF1D1B20),
     sub = Color(0xFF49454F),
     line = Color(0xFFE6E0E9),
@@ -183,9 +198,11 @@ private val MaterialSkin = Skin(
     codeNum = Color(0xFFB45309),
     codeCmt = Color(0xFF79747E),
     codeFn = Color(0xFF1D5FA8),
-    radiusCard = 24.dp,
-    radiusBlock = 16.dp,
-    radiusChoice = 100.dp,
+    // Material 3 的卡片是 12~16dp，不是 24。24 的弧线会压到 12~15dp 内边距里的第一行字上，
+    // 选项更不该做成整圆胶囊——两行文字的左端会顶到弧线上。
+    radiusCard = 16.dp,
+    radiusBlock = 12.dp,
+    radiusChoice = 12.dp,
     borderWidth = 1.dp,
     bodySize = 15.sp,
     bodyLine = 23.sp,
@@ -291,15 +308,20 @@ val LocalSkin = staticCompositionLocalOf { PrintSkin }
 /**
  * 只放大"读的字"，不动容器半径和留白——否则整页会像被放大镜压过。
  * [scale] 取 0.9~1.4，1.0 是设计稿原尺寸。
+ *
+ * 除了几个具名 token，Skin 里还记下 scale 本身，供 [Skin.fs] / [Skin.ui]
+ * 给写死的字号和控件尺寸兜底——否则调大字号后只有正文变、按钮上的小字不变。
  */
 fun Skin.scaled(scale: Float): Skin {
-    if (scale == 1f) return this
+    if (scale == 1f) return copy(scale = 1f)
+    // 所有字号统一乘同一个倍率：小的那几档再单独压一压，会出现「正文变大了、辅助字没变」的错位。
     return copy(
         bodySize = (bodySize.value * scale).sp,
         bodyLine = (bodyLine.value * scale).sp,
-        smallSize = (smallSize.value * scale.coerceAtMost(1.2f)).sp,
+        smallSize = (smallSize.value * scale).sp,
         stepTitleSize = (stepTitleSize.value * scale).sp,
-        heroSize = (heroSize.value * scale.coerceAtMost(1.15f)).sp,
+        heroSize = (heroSize.value * scale).sp,
+        scale = scale,
     )
 }
 

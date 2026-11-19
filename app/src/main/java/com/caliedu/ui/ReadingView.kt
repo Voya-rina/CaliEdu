@@ -55,7 +55,7 @@ fun ReadingView(
             if (plan.knowledge.isNotEmpty()) {
                 Text(
                     plan.knowledge.joinToString("、"),
-                    fontSize = 11.5.sp,
+                    fontSize = skin.fs(11.5f),
                     color = skin.sub,
                 )
                 Spacer(Modifier.height(14.dp))
@@ -74,7 +74,7 @@ fun ReadingView(
                     ) {
                         Text(
                             brief.n.toString(),
-                            fontSize = 11.sp,
+                            fontSize = skin.fs(11f),
                             fontWeight = FontWeight.Bold,
                             color = skin.accent,
                         )
@@ -98,7 +98,7 @@ fun ReadingView(
                                 Icons.Rounded.Edit,
                                 contentDescription = "回到这一步做题",
                                 tint = skin.line,
-                                modifier = Modifier.size(15.dp),
+                                modifier = Modifier.size(skin.ui(15f)),
                             )
                         }
                     }
@@ -124,7 +124,7 @@ fun ReadingView(
                             verticalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             content.summary.forEach { line ->
-                                Text(line, fontSize = 12.5.sp, lineHeight = 20.sp, color = skin.text)
+                                Text(line, fontSize = skin.fs(12.5f), lineHeight = skin.fs(20f), color = skin.text)
                             }
                         }
                     }
@@ -159,7 +159,7 @@ private fun MissingBlock(waiting: Boolean, enabled: Boolean, onClick: () -> Unit
     ) {
         if (waiting) {
             CircularProgressIndicator(
-                modifier = Modifier.size(15.dp),
+                modifier = Modifier.size(skin.ui(15f)),
                 strokeWidth = 1.6.dp,
                 color = skin.accent,
             )
@@ -168,7 +168,7 @@ private fun MissingBlock(waiting: Boolean, enabled: Boolean, onClick: () -> Unit
                 Icons.Rounded.Refresh,
                 contentDescription = null,
                 tint = if (enabled) skin.accent else skin.sub,
-                modifier = Modifier.size(15.dp),
+                modifier = Modifier.size(skin.ui(15f)),
             )
         }
         Spacer(Modifier.width(10.dp))
@@ -178,7 +178,7 @@ private fun MissingBlock(waiting: Boolean, enabled: Boolean, onClick: () -> Unit
                 enabled -> "写这一步"
                 else -> "示例课没有这一步的正文"
             },
-            fontSize = 12.5.sp,
+            fontSize = skin.fs(12.5f),
             color = if (enabled) skin.accent else skin.sub,
         )
     }

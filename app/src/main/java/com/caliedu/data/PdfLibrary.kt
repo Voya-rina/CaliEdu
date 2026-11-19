@@ -5,16 +5,25 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import kotlinx.serialization.Serializable
 
-/** 资料夹里的一个 PDF。uri 是 SAF 的 document uri，带持久授权。 */
+/** 资料夹里的一个文件。uri 是 SAF 的 document uri，带持久授权。 */
 @Serializable
 data class PdfItem(
     val name: String = "",
     val uri: String = "",
     val size: Long = 0L,
     val modified: Long = 0L,
-)
+) {
+    /** PDF 只能打开看（Android 上没有可靠的文字层抽取）；纯文本这类能直接拿来出题。 */
+    val isText: Boolean get() = TEXT_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
 
-/** 用户选过的那一个文件夹，以及上次扫出来的 PDF 清单。 */
+    val isPdf: Boolean get() = name.endsWith(".pdf", ignoreCase = true)
+
+    companion object {
+        val TEXT_SUFFIXES = listOf(".md", ".markdown", ".txt", ".tex", ".text")
+    }
+}
+
+/** 用户选过的那一个文件夹，以及上次扫出来的文件清单。 */
 @Serializable
 data class PdfLibrary(
     val treeUri: String = "",
@@ -25,6 +34,10 @@ data class PdfLibrary(
     val picked: Boolean get() = treeUri.isNotBlank()
 
     val totalSize: Long get() = items.sumOf { it.size }
+
+    val usableCount: Int get() = items.count { it.isText }
+
+    val pdfCount: Int get() = items.count { it.isPdf }
 }
 
 /**
@@ -90,7 +103,8 @@ object PdfScanner {
                         mime == DocumentsContract.Document.MIME_TYPE_DIR ->
                             walk(resolver, tree, id, depth + 1, out)
 
-                        mime == "application/pdf" || name.endsWith(".pdf", ignoreCase = true) ->
+                        mime == "application/pdf" || name.endsWith(".pdf", ignoreCase = true) ||
+                            PdfItem.TEXT_SUFFIXES.any { name.endsWith(it, ignoreCase = true) } ->
                             out += PdfItem(
                                 name = name,
                                 uri = DocumentsContract.buildDocumentUriUsingTree(tree, id).toString(),

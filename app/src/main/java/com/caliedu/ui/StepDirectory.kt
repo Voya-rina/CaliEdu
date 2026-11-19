@@ -27,11 +27,13 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.caliedu.UiState
+import com.caliedu.core.Category
 
 /**
  * 步骤目录。长课听到一半想跳回去看某一节，比一路点「下一步」现实得多。
@@ -67,11 +69,26 @@ fun StepDirectorySheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("目录", fontSize = skin.stepTitleSize * 0.9f, fontWeight = FontWeight.Bold, color = skin.text)
                 Spacer(Modifier.weight(1f))
+                // 原来写的是「已写」，那只是正文有没有生成，跟学生做到哪没关系。
                 Text(
-                    "${state.contents.size} / ${plan.steps.size} 已写",
-                    fontSize = 11.5.sp,
+                    "${state.passed.size} / ${plan.steps.size} " + if (state.isDoc) "已读" else "已过",
+                    fontSize = skin.fs(11.5f),
                     color = skin.sub,
                 )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Category.tagsOf(plan).forEach { tag ->
+                    Text(
+                        tag,
+                        fontSize = skin.fs(10f),
+                        color = skin.accentDeep,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(100.dp))
+                            .background(skin.accentSoft)
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
             }
             Spacer(Modifier.height(10.dp))
 
@@ -82,6 +99,7 @@ fun StepDirectorySheet(
                 itemsIndexed(plan.steps) { index, brief ->
                     val current = index == state.progress.idx
                     val ready = state.contents.containsKey(brief.n)
+                    val passed = index in state.passed
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -97,20 +115,20 @@ fun StepDirectorySheet(
                             Modifier
                                 .size(20.dp)
                                 .background(
-                                    if (ready) skin.accent else skin.codeBg,
+                                    if (passed) skin.accent else skin.codeBg,
                                     RoundedCornerShape(6.dp),
                                 ),
                             contentAlignment = Alignment.Center,
                         ) {
-                            if (ready) {
+                            if (passed) {
                                 Icon(
                                     Icons.Rounded.Check,
                                     contentDescription = null,
                                     tint = skin.onAccent,
-                                    modifier = Modifier.size(12.dp),
+                                    modifier = Modifier.size(skin.ui(12f)),
                                 )
                             } else {
-                                Text("${brief.n}", fontSize = 10.sp, color = skin.sub)
+                                Text("${brief.n}", fontSize = skin.fs(10f), color = skin.sub)
                             }
                         }
                         Spacer(Modifier.width(11.dp))
@@ -123,12 +141,15 @@ fun StepDirectorySheet(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            if (brief.stage.isNotBlank()) {
-                                Text(brief.stage, fontSize = 10.5.sp, color = skin.sub)
+                            // 「待生成」只在通读模式下提示：那时你要决定先读哪一节。
+                            // 闯关模式里它是技术细节，22 行都挂一句只会变成噪音。
+                            val note = brief.stage + if (!ready && state.reading) " · 待生成" else ""
+                            if (note.isNotBlank()) {
+                                Text(note, fontSize = skin.fs(10.5f), color = skin.sub)
                             }
                         }
                         if (current) {
-                            Text("当前", fontSize = 10.5.sp, color = skin.accent)
+                            Text("当前", fontSize = skin.fs(10.5f), color = skin.accent)
                         }
                     }
                 }

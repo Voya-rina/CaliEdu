@@ -62,6 +62,7 @@ import com.caliedu.ui.ModelScreen
 import com.caliedu.ui.PlayScreen
 import com.caliedu.ui.RecordsScreen
 import com.caliedu.ui.RelayScreen
+import com.caliedu.ui.ReviewScreen
 import com.caliedu.ui.SettingsHome
 import com.caliedu.ui.StyleScreen
 import com.caliedu.ui.UiStyle
@@ -132,6 +133,9 @@ fun CaliEduApp(
                             onInput = vm::onInput,
                             onStart = vm::start,
                             onSample = vm::startSample,
+                            onReview = vm::startReview,
+                            onDocSample = vm::startDocSample,
+                            onMarkdown = vm::openMarkdown,
                             onResume = vm::openRecord,
                             onMistakes = { vm.goRecords(1) },
                         )
@@ -139,10 +143,14 @@ fun CaliEduApp(
                         Screen.RECORDS -> RecordsScreen(
                             records = state.records,
                             tab = state.recordsTab,
+                            filter = state.recordsFilter,
                             onTab = vm::setRecordsTab,
+                            onFilter = vm::setRecordsFilter,
                             onOpen = vm::openRecord,
                             onOpenMistake = vm::openAt,
                             onDelete = vm::deleteRecord,
+                            onRecategorize = vm::setCategory,
+                            onReview = vm::startReview,
                             onStart = { vm.go(Screen.HOME) },
                             onClear = vm::clearRecords,
                         )
@@ -177,6 +185,7 @@ fun CaliEduApp(
                             busy = state.libraryBusy,
                             onImport = vm::importFolder,
                             onRescan = vm::rescanFolder,
+                            onUse = { item, start, pages -> vm.useFile(item, start, pages) },
                             onToast = vm::toast,
                             onBack = { vm.back() },
                         )
@@ -188,6 +197,8 @@ fun CaliEduApp(
                             onDraft = vm::onDraft,
                             onHint = vm::askHint,
                             onNext = vm::next,
+                            onPrev = vm::prev,
+                            onSimilar = vm::practiseSimilar,
                             onToggleReading = vm::toggleReading,
                             onRetry = { vm.loadStep(state.progress.idx) },
                             onJump = vm::loadStep,
@@ -195,6 +206,8 @@ fun CaliEduApp(
                             onAskClose = vm::closeAsk,
                             onAskInput = vm::onAskInput,
                             onAskSend = { vm.ask(state.askInput) },
+                            onScale = vm::setTextScale,
+                            onScaleCommit = vm::commitTextScale,
                             onGenerate = vm::ensureStep,
                             onFocusStep = { index ->
                                 vm.toggleReading()
@@ -222,6 +235,13 @@ fun CaliEduApp(
                                     }
                                 }
                             },
+                        )
+
+                        Screen.REVIEW -> ReviewScreen(
+                            state = state,
+                            onReveal = vm::revealReview,
+                            onGrade = vm::gradeReview,
+                            onBack = { vm.back() },
                         )
 
                         Screen.PLAY -> PlayScreen(
@@ -257,7 +277,7 @@ fun CaliEduApp(
 /** 页面层级：同级淡入淡出，跨级左右滑。 */
 private fun depthOf(screen: Screen): Int = when (screen) {
     Screen.HOME, Screen.RECORDS, Screen.SETTINGS -> 0
-    Screen.STYLE, Screen.MODEL, Screen.LIBRARY -> 1
+    Screen.STYLE, Screen.MODEL, Screen.LIBRARY, Screen.REVIEW -> 1
     Screen.LESSON, Screen.PLAY -> 2
 }
 
@@ -312,22 +332,22 @@ private fun Dock(current: Screen, onSelect: (Screen) -> Unit) {
                                 .background(skin.accentSoft, CircleShape)
                                 .padding(horizontal = 17.dp, vertical = 3.dp)
                         ) {
-                            Icon(icon, contentDescription = null, tint = skin.accentDeep, modifier = Modifier.size(20.dp))
+                            Icon(icon, contentDescription = null, tint = skin.accentDeep, modifier = Modifier.size(skin.ui(20f)))
                         }
 
                         skin.style == UiStyle.MATERIAL -> Box(Modifier.padding(vertical = 3.dp)) {
-                            Icon(icon, contentDescription = null, tint = skin.sub, modifier = Modifier.size(20.dp))
+                            Icon(icon, contentDescription = null, tint = skin.sub, modifier = Modifier.size(skin.ui(20f)))
                         }
 
                         else -> Icon(
                             icon,
                             contentDescription = null,
                             tint = if (selected) skin.accent else skin.sub,
-                            modifier = Modifier.size((20 + lift * 2).dp),
+                            modifier = Modifier.size(skin.ui(20f + lift * 2f)),
                         )
                     }
                     Spacer(Modifier.height(3.dp))
-                    Text(label, fontSize = 10.5.sp, color = if (selected) skin.accent else skin.sub)
+                    Text(label, fontSize = skin.fs(10.5f), color = if (selected) skin.accent else skin.sub)
                 }
             }
         }
@@ -376,9 +396,9 @@ private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
                 .padding(15.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Text(message, fontSize = skin.smallSize, lineHeight = 21.sp, color = skin.wrong)
+            Text(message, fontSize = skin.smallSize, lineHeight = skin.fs(21f), color = skin.wrong)
             TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                Text("知道了", fontSize = 12.5.sp, color = skin.wrong)
+                Text("知道了", fontSize = skin.fs(12.5f), color = skin.wrong)
             }
         }
     }
@@ -399,7 +419,7 @@ private fun ToastBanner(message: String, onDone: () -> Unit) {
     ) {
         Text(
             message,
-            fontSize = 12.5.sp,
+            fontSize = skin.fs(12.5f),
             color = skin.onAccent,
             modifier = Modifier
                 .background(skin.text, RoundedCornerShape(100.dp))

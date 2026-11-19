@@ -103,7 +103,7 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
         })
         Text(
             "改动自动保存，不用点保存",
-            fontSize = 11.5.sp,
+            fontSize = skin.fs(11.5f),
             color = skin.sub,
             modifier = Modifier.padding(start = 2.dp, top = 2.dp),
         )
@@ -150,7 +150,7 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                                 }
                                 .padding(horizontal = 10.dp, vertical = 7.dp)
                         ) {
-                            Text(preset.name, fontSize = 12.sp, color = skin.accentDeep)
+                            Text(preset.name, fontSize = skin.fs(12f), color = skin.accentDeep)
                         }
                     }
                 }
@@ -170,15 +170,15 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                 Spacer(Modifier.height(10.dp))
                 Text(
                     "Key 只存在这台手机上，不经过任何服务器。",
-                    fontSize = 11.5.sp,
-                    lineHeight = 18.sp,
+                    fontSize = skin.fs(11.5f),
+                    lineHeight = skin.fs(18f),
                     color = skin.sub,
                 )
                 if (settings.apiKey.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "清除已存的 Key",
-                        fontSize = 11.5.sp,
+                        fontSize = skin.fs(11.5f),
                         color = skin.wrong,
                         modifier = Modifier
                             .clickable {
@@ -239,7 +239,7 @@ private fun RelayNotes(skin: Skin) {
             Row {
                 Text(
                     "${index + 1}",
-                    fontSize = 11.sp,
+                    fontSize = skin.fs(11f),
                     color = skin.onAccent,
                     modifier = Modifier
                         .padding(top = 2.dp)
@@ -247,13 +247,13 @@ private fun RelayNotes(skin: Skin) {
                         .padding(horizontal = 6.dp, vertical = 1.dp),
                 )
                 Spacer(Modifier.width(9.dp))
-                Text(line, fontSize = skin.smallSize, lineHeight = 21.sp, color = skin.sub)
+                Text(line, fontSize = skin.smallSize, lineHeight = skin.fs(21f), color = skin.sub)
             }
         }
         Text(
             "地址和模型只在直连时用到，这里不需要填。",
-            fontSize = 11.sp,
-            lineHeight = 17.sp,
+            fontSize = skin.fs(11f),
+            lineHeight = skin.fs(17f),
             color = skin.sub,
         )
     }
@@ -284,7 +284,7 @@ private fun ModeCard(
             fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
             color = if (selected) skin.accentDeep else skin.text,
         )
-        Text(mode.note, fontSize = 11.sp, lineHeight = 16.sp, color = skin.sub)
+        Text(mode.note, fontSize = skin.fs(11f), lineHeight = skin.fs(16f), color = skin.sub)
     }
 }
 
@@ -305,7 +305,7 @@ private fun ToggleRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(title, fontSize = skin.smallSize, color = if (enabled) skin.text else skin.sub)
-            Text(note, fontSize = 11.sp, lineHeight = 16.sp, color = skin.sub)
+            Text(note, fontSize = skin.fs(11f), lineHeight = skin.fs(16f), color = skin.sub)
         }
         Spacer(Modifier.width(12.dp))
         Switch(
@@ -332,7 +332,7 @@ private fun Field(
 ) {
     val skin = LocalSkin.current
     Column {
-        Text(label, fontSize = 11.5.sp, color = skin.sub)
+        Text(label, fontSize = skin.fs(11.5f), color = skin.sub)
         Spacer(Modifier.height(5.dp))
         Box(
             Modifier

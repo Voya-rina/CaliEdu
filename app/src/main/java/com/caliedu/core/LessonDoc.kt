@@ -19,6 +19,8 @@ object LessonDoc {
     fun markdown(plan: LessonPlan, contents: Map<Int, StepContent>): String = buildString {
         append("# ").append(plan.title.ifBlank { "未命名" }).append("\n\n")
         if (plan.oneLine.isNotBlank()) append("> ").append(plan.oneLine).append("\n\n")
+        val tags = Category.tagsOf(plan)
+        append("`").append(tags.joinToString("` `")).append("`\n\n")
         if (plan.knowledge.isNotEmpty()) {
             append("**知识点**：").append(plan.knowledge.joinToString("、")).append("\n\n")
         }
@@ -56,6 +58,7 @@ object LessonDoc {
         val body = StringBuilder()
         body.append("<h1>").append(esc(plan.title.ifBlank { "未命名" })).append("</h1>")
         if (plan.oneLine.isNotBlank()) body.append("<blockquote><p>").append(esc(plan.oneLine)).append("</p></blockquote>")
+        body.append("<p>").append(esc(Category.tagsOf(plan).joinToString(" / "))).append("</p>")
         if (plan.knowledge.isNotEmpty()) {
             body.append("<p><strong>知识点</strong>：").append(esc(plan.knowledge.joinToString("、"))).append("</p>")
         }

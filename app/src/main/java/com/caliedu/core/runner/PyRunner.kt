@@ -87,6 +87,35 @@ object PyRunner {
             )
         }
 
+    /**
+     * 调我们自己写的 Python 工具函数（如 `pdf_text.extract`）。
+     * 约定返回值是 `[ok, 文字]`：ok 为 True 时第二项是结果，否则是给人看的错误原因。
+     */
+    suspend fun call(
+        context: Context,
+        module: String,
+        func: String,
+        vararg args: Any,
+        timeoutMs: Long = 30_000,
+    ): RunResult = withContext(Dispatchers.IO) {
+        val py = ensure(context) ?: return@withContext RunResult(false, reason(), 0)
+        val started = System.currentTimeMillis()
+        val gate = CompletableDeferred<RunResult>()
+        Thread {
+            val result = runCatching { invokeFn(py, module, func, args) }.getOrElse { e ->
+                RunResult(false, "调用 $module.$func 失败：${e.cause?.message ?: e.message ?: e::class.simpleName}", 0)
+            }
+            if (!gate.isCompleted) gate.complete(result.copy(ms = System.currentTimeMillis() - started))
+        }.apply { isDaemon = true }.start()
+
+        withTimeoutOrNull(timeoutMs) { gate.await() } ?: RunResult(
+            ok = false,
+            output = "处理超过 ${timeoutMs / 1000} 秒，已放弃。换个小一点的 PDF 试试。",
+            ms = System.currentTimeMillis() - started,
+            timedOut = true,
+        )
+    }
+
     private fun invoke(py: Any, code: String): RunResult {
         val pyObjectClass = Class.forName("com.chaquo.python.PyObject")
         val module = py.javaClass.getMethod("getModule", String::class.java).invoke(py, "runner")
@@ -96,5 +125,16 @@ object PyRunner {
         val ok = values.getOrNull(0)?.toString()?.trim() == "True"
         val out = values.getOrNull(1)?.toString().orEmpty()
         return RunResult(ok, out.ifBlank { if (ok) "（没有任何输出）" else "（没有输出，但退出码非零）" }, 0)
+    }
+
+    private fun invokeFn(py: Any, module: String, func: String, args: Array<out Any>): RunResult {
+        val pyObjectClass = Class.forName("com.chaquo.python.PyObject")
+        val mod = py.javaClass.getMethod("getModule", String::class.java).invoke(py, module)
+        val call = pyObjectClass.getMethod("callAttr", String::class.java, Array<Any>::class.java)
+        val returned = call.invoke(mod, func, arrayOf<Any>(*args))
+        val values = pyObjectClass.getMethod("asList").invoke(returned) as List<*>
+        val ok = values.getOrNull(0)?.toString()?.trim() == "True"
+        val out = values.getOrNull(1)?.toString().orEmpty()
+        return RunResult(ok, out, 0)
     }
 }

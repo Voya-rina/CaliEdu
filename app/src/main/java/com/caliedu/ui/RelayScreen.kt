@@ -77,7 +77,7 @@ fun RelayScreen(
             Spacer(Modifier.height(6.dp))
             Text(
                 "第 1 步",
-                fontSize = 11.sp,
+                fontSize = skin.fs(11f),
                 color = skin.accent,
                 fontWeight = FontWeight.Medium,
             )
@@ -113,13 +113,13 @@ fun RelayScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (expanded) "收起" else "看提示词",
-                    fontSize = 12.sp,
+                    fontSize = skin.fs(12f),
                     color = skin.accent,
                 )
                 Spacer(Modifier.weight(1f))
                 Text(
                     "${pending.packet.length} 字",
-                    fontSize = 11.sp,
+                    fontSize = skin.fs(11f),
                     color = skin.sub,
                 )
             }
@@ -127,8 +127,8 @@ fun RelayScreen(
             Text(
                 text = pending.packet,
                 fontFamily = FontFamily.Monospace,
-                fontSize = 11.5.sp,
-                lineHeight = 18.sp,
+                fontSize = skin.fs(11.5f),
+                lineHeight = skin.fs(18f),
                 color = skin.sub,
                 maxLines = if (expanded) Int.MAX_VALUE else 4,
                 modifier = Modifier
@@ -154,7 +154,7 @@ fun RelayScreen(
         }
 
         Spacer(Modifier.height(18.dp))
-        Text("第 2 步 · 把模型吐回来的内容粘在这里", fontSize = 11.sp, color = skin.sub)
+        Text("第 2 步 · 把模型吐回来的内容粘在这里", fontSize = skin.fs(11f), color = skin.sub)
         Spacer(Modifier.height(8.dp))
 
         Box(
@@ -169,7 +169,7 @@ fun RelayScreen(
                 Text(
                     "整段贴进来就行，多带了说明文字也没关系。",
                     fontSize = skin.smallSize,
-                    lineHeight = 20.sp,
+                    lineHeight = skin.fs(20f),
                     color = skin.sub.copy(alpha = 0.8f),
                 )
             }
@@ -178,8 +178,8 @@ fun RelayScreen(
                 onValueChange = { pasted = it },
                 textStyle = TextStyle(
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 19.sp,
+                    fontSize = skin.fs(12f),
+                    lineHeight = skin.fs(19f),
                     color = skin.text,
                 ),
                 cursorBrush = SolidColor(skin.accent),
@@ -228,6 +228,6 @@ private fun ActionChip(
     ) {
         Icon(icon, contentDescription = null, tint = if (primary) skin.accent else skin.sub, modifier = Modifier.size(15.dp))
         Spacer(Modifier.width(6.dp))
-        Text(label, fontSize = 12.5.sp, color = if (primary) skin.accent else skin.sub)
+        Text(label, fontSize = skin.fs(12.5f), color = if (primary) skin.accent else skin.sub)
     }
 }

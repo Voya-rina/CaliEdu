@@ -1,8 +1,10 @@
 package com.caliedu.llm
 
 import com.caliedu.core.CodeDigest
-import com.caliedu.core.Judge
 import com.caliedu.core.Prompts
+import com.caliedu.core.Track
+import com.caliedu.core.Subject
+import com.caliedu.core.TrackDetector
 import com.caliedu.core.Verdict
 import com.caliedu.data.ChannelMode
 import com.caliedu.data.LlmSettings
@@ -20,6 +22,9 @@ import kotlinx.serialization.json.decodeFromJsonElement
 
 @Serializable
 private data class GradeJson(val verdict: String = "", val note: String = "")
+
+@Serializable
+private data class VariantJson(val title: String = "", val problem: String = "")
 
 data class Grade(val verdict: Verdict, val note: String)
 
@@ -41,11 +46,12 @@ class LessonGenerator(
     }
 
     suspend fun analyze(settings: LlmSettings, input: String): LessonPlan {
-        val isCode = CodeDigest.looksLikeCode(input)
+        val hint = TrackDetector.detect(input)
+        val isCode = hint == Track.CODE
         val payload = if (isCode && CodeDigest.shouldDigest(input)) CodeDigest.digest(input) else input
         val raw = channelOf(settings).complete(
-            Prompts.analyzeSystem,
-            Prompts.analyzeUser(payload, isCode),
+            Prompts.analyzeSystem(hint),
+            Prompts.analyzeUser(payload, hint),
             json = true,
             label = "拆题",
         )
@@ -57,13 +63,73 @@ class LessonGenerator(
         }
         if (!planOk(plan)) throw ChatException("没能把返回内容读成步骤表。开头是：${raw.take(120)}")
         val safe = plan!!
-        return safe.copy(steps = safe.steps.mapIndexed { index, step ->
-            step.copy(n = if (step.n > 0) step.n else index + 1)
-        })
+        // 步数不设限，但仍要挡住模型发疯或漏编号的情况：编号强制连续，超长截断。
+        val steps = safe.steps
+            .filter { it.title.isNotBlank() }
+            .take(MAX_STEPS)
+            .mapIndexed { index, step -> step.copy(n = index + 1) }
+        val track = settle(hint, safe.kind)
+        // 分类必须以固定大类开头，模型写花了就地折回来。
+        return safe.copy(
+            kind = track.key,
+            tags = Subject.normalize(safe.tags, track, input),
+            steps = steps,
+        )
+    }
+
+    /**
+     * 照原题写一道同类型的新题，只返回题目原文。
+     *
+     * 拆题、讲义、判分仍然走原来那条流水线——不另起一套 prompt，
+     * 也不新增一种「练习课」的数据结构。
+     */
+    suspend fun variant(settings: LlmSettings, plan: LessonPlan, notes: String): String {
+        val raw = channelOf(settings).complete(
+            Prompts.variantSystem,
+            Prompts.variantUser(plan, notes),
+            json = true,
+            label = "出一道同类题",
+        )
+        val unwrap = listOf("题", "题目", "problem")
+        var text = decode(raw, VariantJson.serializer(), unwrapKeys = unwrap)
+            ?.problem?.trim().orEmpty()
+        if (text.length < MIN_PROBLEM) {
+            val fixed = repair(settings, VARIANT_SCHEMA, raw, "同类题 · 补字段")
+            val again = decode(fixed, VariantJson.serializer(), unwrapKeys = unwrap)
+                ?.problem?.trim().orEmpty()
+            if (again.length > text.length) text = again
+        }
+        if (text.length >= MIN_PROBLEM) return text
+
+        // 模型偶尔不按 JSON 来：剥掉围栏整段当题目用，总比把人卡住强。
+        val plain = raw
+            .replace(Regex("```[a-zA-Z]*"), "")
+            .replace("```", "")
+            .trim()
+            .removePrefix("题目：")
+            .removePrefix("新题：")
+            .trim()
+        if (plain.length >= MIN_PROBLEM && !plain.startsWith("{")) return plain
+        throw ChatException("没能出一道同类题。开头是：${raw.take(120)}")
+    }
+
+    /**
+     * 本地先猜的题型和模型返回的题型对不上时，谁说了算：
+     * 代码文件不会被误判成数学题，所以本地认出代码就直接用代码那套；
+     * 其余情况宁可偏向更具体的数学，也不要掉进通用模板。
+     */
+    private fun settle(hint: Track, modelKind: String): Track {
+        val fromModel = Track.of(modelKind)
+        return when {
+            hint == Track.CODE -> Track.CODE
+            hint == Track.MATH -> Track.MATH
+            fromModel == Track.CODE || fromModel == Track.MATH -> fromModel
+            else -> Track.GENERAL
+        }
     }
 
     private fun planOk(plan: LessonPlan?): Boolean =
-        plan != null && plan.steps.isNotEmpty() && plan.steps.all { it.title.isNotBlank() }
+        plan != null && plan.steps.isNotEmpty() && plan.steps.any { it.title.isNotBlank() }
 
     private fun contentOk(content: StepContent?): Boolean =
         content != null && content.blocks.any { it.md.isNotBlank() }
@@ -83,10 +149,10 @@ class LessonGenerator(
         notes: String,
     ): StepContent {
         val raw = channelOf(settings).complete(
-            Prompts.teachSystem,
+            Prompts.teachSystem(Track.of(plan.kind)),
             Prompts.teachUser(plan, brief, notes),
             json = true,
-            label = "第 ${brief.n} 步《${brief.title}》讲义",
+            label = "第 ${brief.n} 步《${brief.title}》",
         )
         var content = decode(raw, StepContent.serializer(), unwrapKeys = listOf("step", "内容", "讲义"))
         if (!contentOk(content)) {
@@ -94,7 +160,7 @@ class LessonGenerator(
             content = decode(fixed, StepContent.serializer(), unwrapKeys = listOf("step", "内容", "讲义")) ?: content
         }
         if (!contentOk(content)) {
-            throw ChatException("第 ${brief.n} 步的讲义没能解析。开头是：${raw.take(120)}")
+            throw ChatException("第 ${brief.n} 步的正文没能解析。开头是：${raw.take(120)}")
         }
         return content!!.copy(n = brief.n)
     }
@@ -154,7 +220,7 @@ class LessonGenerator(
     }
 
     private fun looksEmpty(root: JsonObject): Boolean =
-        root.keys.none { it in setOf("title", "steps", "blocks", "question", "verdict") }
+        root.keys.none { it in setOf("title", "steps", "blocks", "question", "verdict", "problem") }
 
     private fun fixMathEscapes(element: JsonElement): JsonElement = when (element) {
         is JsonObject -> JsonObject(element.mapValues { (_, value) -> fixMathEscapes(value) })
@@ -173,8 +239,16 @@ class LessonGenerator(
     }
 
     private companion object {
+        /** 不设上下限，但得挡住上万步把内存和钱烧穿。正常题目远到不了这个数。 */
+        const val MAX_STEPS = 60
+
         const val PLAN_SCHEMA =
-            """{"title":"","kind":"code|math|general","oneLine":"","knowledge":[""],"steps":[{"n":1,"title":"","stage":"读题|框架|预备|逐块|排错|整合|自测","goal":"","judgeKind":"choice|short|checklist"}],"needsRun":false}"""
+            """{"title":"","kind":"code|math|general","oneLine":"","tags":[""],"knowledge":[""],"steps":[{"n":1,"title":"","stage":"读题|框架|预备|逐块|排错|整合|自测|建模|定路|推导|检验|收束|概念|推理|结论","goal":"","judgeKind":"choice|short|checklist"}],"needsRun":false}"""
+
+        /** 一道题最短也得有这么多字，否则多半是模型在说「好的」而不是给题。 */
+        const val MIN_PROBLEM = 20
+
+        const val VARIANT_SCHEMA = """{"title":"","problem":""}"""
 
         const val STEP_SCHEMA =
             """{"n":1,"blocks":[{"depth":"core|deep","md":""}],"question":{"prompt":"","kind":"choice|short|checklist","choices":[{"label":"","value":""}],"answer":"","expect":"","rubric":[""]},"hints":["","",""],"onCorrect":"","summary":[""]}"""
@@ -185,6 +259,7 @@ class LessonGenerator(
         "题型" to "kind", "类型" to "kind",
         "一句话" to "oneLine", "简介" to "oneLine", "概述" to "oneLine",
         "知识点" to "knowledge", "知识" to "knowledge",
+        "分类" to "tags", "分类标签" to "tags", "章节" to "tags", "学科" to "tags",
         "步骤" to "steps", "节点" to "steps", "步骤表" to "steps", "节点计划" to "steps",
         "需运行" to "needsRun", "需要运行" to "needsRun",
         "步号" to "n", "序号" to "n", "编号" to "n",

@@ -24,17 +24,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.FormatSize
+import androidx.compose.material.icons.rounded.Functions
 import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.Lightbulb
-import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Slider
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -50,6 +57,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.caliedu.UiState
+import com.caliedu.core.Category
+import com.caliedu.core.Track
 import com.caliedu.core.Verdict
 import com.caliedu.data.ChannelMode
 import com.caliedu.model.Choice
@@ -65,6 +74,8 @@ fun LessonScreen(
     onDraft: (String) -> Unit,
     onHint: () -> Unit,
     onNext: () -> Unit,
+    onPrev: () -> Unit,
+    onSimilar: () -> Unit,
     onToggleReading: () -> Unit,
     onGenerate: (Int) -> Unit,
     onFocusStep: (Int) -> Unit,
@@ -75,11 +86,15 @@ fun LessonScreen(
     onAskClose: () -> Unit,
     onAskInput: (String) -> Unit,
     onAskSend: () -> Unit,
+    onScale: (Float) -> Unit,
+    onScaleCommit: () -> Unit,
 ) {
     val skin = LocalSkin.current
     val plan = state.plan ?: return
     val brief = state.brief
+    val track = Track.of(plan.kind)
     var dirOpen by remember { mutableStateOf(false) }
+    var fontOpen by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -105,26 +120,48 @@ fun LessonScreen(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                val tag = Category.majorOf(plan)
+                val unit = if (state.isDoc) "节" else "步"
                 val meta = when {
-                    state.reading -> "通读 · 共 ${plan.steps.size} 步"
+                    state.reading -> "通读 · 共 ${plan.steps.size} $unit"
+                    state.isDoc -> "第 ${state.progress.idx + 1} / ${plan.steps.size} $unit · $tag"
                     state.offline -> "示例 · 第 ${state.progress.idx + 1} 步"
-                    else -> "第 ${state.progress.idx + 1} 步 · ${brief?.stage.orEmpty()}"
+                    else -> buildString {
+                        append("第 ${state.progress.idx + 1} 步 · ${brief?.stage.orEmpty()}")
+                        if (tag.isNotBlank()) append(" · ").append(tag)
+                    }
                 }
-                Text(
-                    text = if (skin.chromeUppercase) meta.uppercase() else meta,
-                    fontSize = 11.5.sp,
-                    letterSpacing = if (skin.chromeUppercase) 0.6.sp else 0.sp,
-                    color = skin.sub,
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        trackIcon(track),
+                        contentDescription = track.label,
+                        tint = skin.sub,
+                        modifier = Modifier.size(skin.ui(11f)),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = if (skin.chromeUppercase) meta.uppercase() else meta,
+                        fontSize = skin.fs(11.5f),
+                        letterSpacing = if (skin.chromeUppercase) 0.6.sp else 0.sp,
+                        color = skin.sub,
+                    )
+                }
+            }
+            IconButton(onClick = { fontOpen = true }) {
+                Icon(
+                    Icons.Rounded.FormatSize,
+                    contentDescription = "字号",
+                    tint = skin.sub,
                 )
             }
             IconButton(onClick = onToggleReading) {
                 Icon(
-                    if (state.reading) Icons.Rounded.ViewAgenda else Icons.Rounded.MenuBook,
+                    if (state.reading) Icons.Rounded.ViewAgenda else Icons.AutoMirrored.Rounded.MenuBook,
                     contentDescription = if (state.reading) "回到单步" else "通读",
                     tint = skin.sub,
                 )
             }
-            ExportMenu(allowPlay = state.settings.runCode, onExport = onExport)
+            ExportMenu(allowPlay = state.settings.runCode && track == Track.CODE, onExport = onExport)
         }
 
         if (state.reading) {
@@ -141,9 +178,11 @@ fun LessonScreen(
             )
             StepBody(
                 state = state,
+                track = track,
                 onSubmit = onSubmit,
                 onDraft = onDraft,
                 onFinish = onBack,
+                onSimilar = onSimilar,
                 onRetry = onRetry,
                 modifier = Modifier.weight(1f),
             )
@@ -152,6 +191,7 @@ fun LessonScreen(
                     state = state,
                     onHint = onHint,
                     onNext = onNext,
+                    onPrev = onPrev,
                     onAsk = onAskOpen,
                 )
             }
@@ -168,6 +208,15 @@ fun LessonScreen(
             onInput = onAskInput,
             onSend = onAskSend,
             onDismiss = onAskClose,
+        )
+    }
+
+    if (fontOpen) {
+        FontDialog(
+            scale = state.textScale,
+            onChange = onScale,
+            onCommit = onScaleCommit,
+            onDismiss = { fontOpen = false },
         )
     }
 
@@ -189,7 +238,7 @@ private fun ExportMenu(allowPlay: Boolean, onExport: (ExportKind) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { open = true }) {
-            Icon(Icons.Rounded.IosShare, contentDescription = "导出", tint = skin.sub, modifier = Modifier.size(20.dp))
+            Icon(Icons.Rounded.IosShare, contentDescription = "导出", tint = skin.sub, modifier = Modifier.size(skin.ui(20f)))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             DropdownMenuItem(
@@ -233,7 +282,7 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("已写 ${state.contents.size} / ${state.stepCount} 步", fontSize = 12.sp, color = skin.sub)
+            Text("已写 ${state.contents.size} / ${state.stepCount} 步", fontSize = skin.fs(12f), color = skin.sub)
             Spacer(Modifier.weight(1f))
             if (nextMissing >= 0 && !state.offline) {
                 val busy = state.waitingStep >= 0
@@ -244,7 +293,7 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
                 ) {
                     if (busy) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
+                            modifier = Modifier.size(skin.ui(12f)),
                             strokeWidth = 1.5.dp,
                             color = skin.accent,
                         )
@@ -252,7 +301,7 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
                     }
                     Text(
                         if (busy) "正在写…" else "补写第 ${nextMissing + 1} 步",
-                        fontSize = 12.5.sp,
+                        fontSize = skin.fs(12.5f),
                         color = if (busy) skin.sub else skin.accent,
                     )
                 }
@@ -264,9 +313,11 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
 @Composable
 private fun StepBody(
     state: UiState,
+    track: Track,
     onSubmit: (String) -> Unit,
     onDraft: (String) -> Unit,
     onFinish: () -> Unit,
+    onSimilar: () -> Unit,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -282,7 +333,7 @@ private fun StepBody(
     ) {
         Spacer(Modifier.height(20.dp))
         if (state.finished) {
-            FinishedView(state, skin, onBack = onFinish)
+            FinishedView(state, skin, onBack = onFinish, onSimilar = onSimilar)
             Spacer(Modifier.height(40.dp))
             return@Column
         }
@@ -298,9 +349,14 @@ private fun StepBody(
 
             if (content != null) {
                 Markdown(content.blocks.joinToString("\n\n") { it.md })
+                if (content.question.prompt.isBlank()) {
+                    Spacer(Modifier.height(40.dp))
+                    return@Column
+                }
                 Spacer(Modifier.height(22.dp))
                 QuestionCard(
                     content = content,
+                    track = track,
                     answered = answered,
                     chosen = state.draft,
                     grading = state.grading,
@@ -339,15 +395,15 @@ private fun StepBody(
                             Icons.Rounded.Refresh,
                             contentDescription = null,
                             tint = skin.accent,
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(skin.ui(14f)),
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text("这一步没写出来，重试", fontSize = 12.5.sp, color = skin.accent)
+                        Text("这一步没写出来，重试", fontSize = skin.fs(12.5f), color = skin.accent)
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
+                            modifier = Modifier.size(skin.ui(14f)),
                             strokeWidth = 1.6.dp,
                             color = skin.accent,
                         )
@@ -362,9 +418,20 @@ private fun StepBody(
 }
 
 @Composable
-private fun StepBottomBar(state: UiState, onHint: () -> Unit, onNext: () -> Unit, onAsk: () -> Unit) {
+private fun StepBottomBar(
+    state: UiState,
+    onHint: () -> Unit,
+    onNext: () -> Unit,
+    onPrev: () -> Unit,
+    onAsk: () -> Unit,
+) {
     val skin = LocalSkin.current
-    val answered = state.progress.canAdvance
+    // 这一步刚答完（或讲义型没有提问）：提示按钮该收起来
+    val solvedNow = state.progress.canAdvance ||
+        (state.content?.question?.prompt?.isBlank() == true)
+    // 能不能往下走：本次答完，或者这一步之前就过过
+    val canNext = state.canAdvance
+    val canPrev = state.progress.idx > 0
     val canAsk = state.content != null && state.settings.mode == ChannelMode.DIRECT && state.settings.configured
     val isLast = state.progress.idx == (state.plan?.steps?.lastIndex ?: 0)
     Column(Modifier.background(skin.bg)) {
@@ -382,7 +449,23 @@ private fun StepBottomBar(state: UiState, onHint: () -> Unit, onNext: () -> Unit
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (!answered) {
+            // 往回翻：长课里想重看上一节，不该只能开目录。
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .background(if (canPrev) skin.codeBg else skin.bg, CircleShape)
+                    .clickable(enabled = canPrev, onClick = onPrev),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.ChevronLeft,
+                    contentDescription = "上一步",
+                    tint = if (canPrev) skin.sub else skin.line,
+                    modifier = Modifier.size(skin.ui(20f)),
+                )
+            }
+            if (!solvedNow) {
+                Spacer(Modifier.width(8.dp))
                 val left = state.progress.hintsShown < 3
                 Box(
                     Modifier
@@ -395,7 +478,7 @@ private fun StepBottomBar(state: UiState, onHint: () -> Unit, onNext: () -> Unit
                         Icons.Rounded.Lightbulb,
                         contentDescription = "提示",
                         tint = if (left) skin.accent else skin.line,
-                        modifier = Modifier.size(20.dp),
+                        modifier = Modifier.size(skin.ui(20f)),
                     )
                 }
             }
@@ -412,7 +495,7 @@ private fun StepBottomBar(state: UiState, onHint: () -> Unit, onNext: () -> Unit
                         Icons.AutoMirrored.Rounded.Chat,
                         contentDescription = "追问",
                         tint = skin.accent,
-                        modifier = Modifier.size(19.dp),
+                        modifier = Modifier.size(skin.ui(19f)),
                     )
                 }
             }
@@ -421,17 +504,17 @@ private fun StepBottomBar(state: UiState, onHint: () -> Unit, onNext: () -> Unit
                 Modifier
                     .size(50.dp)
                     .background(
-                        if (answered) skin.accent else skin.codeBg,
+                        if (canNext) skin.accent else skin.codeBg,
                         if (skin.pillChoices) CircleShape else RoundedCornerShape(skin.radiusCard),
                     )
-                    .clickable(enabled = answered, onClick = onNext),
+                    .clickable(enabled = canNext, onClick = onNext),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
                     if (isLast) Icons.Rounded.Check else Icons.AutoMirrored.Rounded.ArrowForward,
                     contentDescription = if (isLast) "完成" else "下一步",
-                    tint = if (answered) skin.onAccent else skin.sub,
-                    modifier = Modifier.size(22.dp),
+                    tint = if (canNext) skin.onAccent else skin.sub,
+                    modifier = Modifier.size(skin.ui(22f)),
                 )
             }
         }
@@ -445,22 +528,53 @@ private fun Segments(total: Int, current: Int, skin: Skin, onClick: () -> Unit) 
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 10.dp),
-        horizontalArrangement = Arrangement.spacedBy(if (skin.style == UiStyle.PRINT) 4.dp else 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        repeat(total) { i ->
+        if (total <= 14) {
+            Row(
+                Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(if (skin.style == UiStyle.PRINT) 4.dp else 5.dp),
+            ) {
+                repeat(total) { i ->
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .height(3.dp)
+                            .background(if (i <= current) skin.accent else skin.line, RoundedCornerShape(2.dp))
+                    )
+                }
+            }
+        } else {
+            // 二十几段细线并排就看不出进度了，退成一条连续进度 + 计数。
             Box(
                 Modifier
                     .weight(1f)
                     .height(3.dp)
-                    .background(if (i <= current) skin.accent else skin.line, RoundedCornerShape(2.dp))
-            )
+                    .background(skin.line, RoundedCornerShape(2.dp))
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth((current + 1f) / total.coerceAtLeast(1))
+                        .height(3.dp)
+                        .background(skin.accent, RoundedCornerShape(2.dp))
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Text("${current + 1}/$total", fontSize = skin.fs(10.5f), color = skin.sub)
         }
     }
+}
+
+private fun trackIcon(track: Track) = when (track) {
+    Track.CODE -> Icons.Rounded.Code
+    Track.MATH -> Icons.Rounded.Functions
+    Track.GENERAL -> Icons.AutoMirrored.Rounded.Notes
 }
 
 @Composable
 private fun QuestionCard(
     content: StepContent,
+    track: Track,
     answered: Boolean,
     chosen: String,
     grading: Boolean,
@@ -517,7 +631,12 @@ private fun QuestionCard(
             ) {
                 if (chosen.isEmpty()) {
                     Text(
-                        if (multi) "用自己的话写两句，按要点说" else "一句话回答",
+                        text = when {
+                            multi -> "用自己的话写两句，按要点说"
+                            track == Track.MATH -> "把式子或数值写在这"
+                            track == Track.CODE -> "一句话回答，说清为什么"
+                            else -> "一句话回答"
+                        },
                         fontSize = skin.smallSize,
                         color = skin.sub,
                     )
@@ -552,12 +671,12 @@ private fun QuestionCard(
                 if (grading) {
                     Spacer(Modifier.width(12.dp))
                     CircularProgressIndicator(
-                        modifier = Modifier.size(13.dp),
+                        modifier = Modifier.size(skin.ui(13f)),
                         strokeWidth = 1.5.dp,
                         color = skin.accent,
                     )
                     Spacer(Modifier.width(7.dp))
-                    Text("看一下", fontSize = 11.5.sp, color = skin.sub)
+                    Text("看一下", fontSize = skin.fs(11.5f), color = skin.sub)
                 }
             }
         } else {
@@ -667,7 +786,12 @@ private fun FeedbackBlock(correct: Boolean, text: String, skin: Skin) {
 }
 
 @Composable
-private fun FinishedView(state: UiState, skin: Skin, onBack: () -> Unit) {
+private fun FinishedView(
+    state: UiState,
+    skin: Skin,
+    onBack: () -> Unit,
+    onSimilar: () -> Unit,
+) {
     val plan = state.plan
     Column {
         Text(
@@ -679,11 +803,30 @@ private fun FinishedView(state: UiState, skin: Skin, onBack: () -> Unit) {
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            "这道题被拆成 ${plan?.steps?.size ?: 0} 步，答对 ${state.solved} 次、答错 ${state.wrongs} 次。",
+            if (state.isDoc) {
+                "读完了 ${plan?.steps?.size ?: 0} 节。"
+            } else {
+                "这道题被拆成 ${plan?.steps?.size ?: 0} 步，答对 ${state.solved} 次、答错 ${state.wrongs} 次。"
+            },
             fontSize = skin.bodySize,
             lineHeight = skin.bodyLine,
             color = skin.sub,
         )
+        if (plan != null) {
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Category.tagsOf(plan).forEach { tag ->
+                    Text(
+                        tag,
+                        fontSize = skin.fs(10.5f),
+                        color = skin.accentDeep,
+                        modifier = Modifier
+                            .background(skin.accentSoft, RoundedCornerShape(100.dp))
+                            .padding(horizontal = 9.dp, vertical = 3.dp),
+                    )
+                }
+            }
+        }
         Spacer(Modifier.height(22.dp))
         if (!plan?.knowledge.isNullOrEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -696,13 +839,85 @@ private fun FinishedView(state: UiState, skin: Skin, onBack: () -> Unit) {
             }
         }
         Spacer(Modifier.height(26.dp))
-        Box(
-            Modifier
-                .background(skin.accent, RoundedCornerShape(if (skin.pillChoices) 100.dp else skin.radiusCard))
-                .clickable(onClick = onBack)
-                .padding(horizontal = 20.dp, vertical = 12.dp)
-        ) {
-            Text("换一道题", fontSize = skin.bodySize, color = skin.onAccent)
+        // 走完不是终点：要么换一道新的，要么照着这道再来一道同类型的。
+        val canSimilar = !state.isDoc &&
+            state.settings.mode == ChannelMode.DIRECT &&
+            state.settings.configured
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (canSimilar) {
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .background(skin.accentSoft, RoundedCornerShape(if (skin.pillChoices) 100.dp else skin.radiusCard))
+                        .clickable(onClick = onSimilar)
+                        .padding(vertical = 13.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "练一道同类的",
+                        fontSize = skin.bodySize * 0.95f,
+                        color = skin.accentDeep,
+                    )
+                }
+            }
+            Box(
+                Modifier
+                    .weight(1f)
+                    .background(skin.accent, RoundedCornerShape(if (skin.pillChoices) 100.dp else skin.radiusCard))
+                    .clickable(onClick = onBack)
+                    .padding(vertical = 13.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (state.isDoc) "回首页" else "换一道题",
+                    fontSize = skin.bodySize * 0.95f,
+                    color = skin.onAccent,
+                )
+            }
         }
     }
+}
+
+/** 正在读的时候想调字号，不该被赶回设置页。 */
+@Composable
+private fun FontDialog(
+    scale: Float,
+    onChange: (Float) -> Unit,
+    onCommit: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val skin = LocalSkin.current
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = skin.surface,
+        shape = RoundedCornerShape(skin.radiusCard),
+        title = {
+            Text("字号", fontSize = skin.fs(15.5f), fontWeight = FontWeight.Medium, color = skin.text)
+        },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("A", fontSize = skin.fs(12f), color = skin.sub)
+                Slider(
+                    value = scale,
+                    onValueChange = onChange,
+                    onValueChangeFinished = onCommit,
+                    valueRange = 0.9f..1.4f,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 10.dp),
+                )
+                Text("A", fontSize = skin.fs(22f), color = skin.sub)
+            }
+        },
+        confirmButton = {
+            Text(
+                "好",
+                fontSize = skin.fs(12.5f),
+                color = skin.accent,
+                modifier = Modifier
+                    .clickable(onClick = onDismiss)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            )
+        },
+    )
 }

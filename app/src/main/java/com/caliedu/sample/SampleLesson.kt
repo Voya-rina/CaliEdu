@@ -11,12 +11,13 @@ import com.caliedu.model.StepContent
  * 离线示例：闯关 10-11《鲍鱼年龄预测》，逐块对着真实源码提问。
  * 数据事实（4177 行、无表头、9 列）与源码行为按 0学校/AI大数据实验室 下的原文件核对。
  */
-object SampleLesson {
+object SampleLesson : Sample {
 
-    val plan = LessonPlan(
+    override val plan = LessonPlan(
         title = "闯关 10-11 鲍鱼年龄预测",
         kind = "code",
         oneLine = "4177 行文本 → 归一化矩阵 → 分批喂进四层全连接网络 → 预测环数",
+        tags = listOf("机器学习", "数据处理"),
         knowledge = listOf(
             "csv 逐行读取", "numpy 切片与形状", "最小-最大归一化",
             "生成器与分批", "全连接回归", "R² 评估",
@@ -48,7 +49,7 @@ object SampleLesson {
         ),
     )
 
-    val contents: Map<Int, StepContent> = listOf(
+    override val contents: Map<Int, StepContent> = listOf(
         StepContent(
             n = 1,
             blocks = listOf(

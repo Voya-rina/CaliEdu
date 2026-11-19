@@ -89,7 +89,7 @@ fun AskSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("追问", fontSize = skin.stepTitleSize * 0.82f, fontWeight = FontWeight.Bold, color = skin.text)
-                    Text(stepTitle, fontSize = 11.sp, color = skin.sub, maxLines = 1)
+                    Text(stepTitle, fontSize = skin.fs(11f), color = skin.sub, maxLines = 1)
                 }
                 Box(
                     Modifier
@@ -97,7 +97,7 @@ fun AskSheet(
                         .clickable(onClick = onDismiss),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = skin.sub, modifier = Modifier.size(17.dp))
+                    Icon(Icons.Rounded.Close, contentDescription = "关闭", tint = skin.sub, modifier = Modifier.size(skin.ui(17f)))
                 }
             }
             Spacer(Modifier.height(10.dp))
@@ -154,7 +154,7 @@ fun AskSheet(
                 ) {
                     if (asking) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(15.dp),
+                            modifier = Modifier.size(skin.ui(15f)),
                             strokeWidth = 1.6.dp,
                             color = skin.accent,
                         )
@@ -163,7 +163,7 @@ fun AskSheet(
                             Icons.AutoMirrored.Rounded.Send,
                             contentDescription = "发送",
                             tint = if (input.isNotBlank()) skin.onAccent else skin.sub,
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(skin.ui(18f)),
                         )
                     }
                 }
@@ -184,7 +184,7 @@ private fun HintChip(text: String, onClick: () -> Unit) {
     val skin = LocalSkin.current
     Text(
         text,
-        fontSize = 12.sp,
+        fontSize = skin.fs(12f),
         color = skin.sub,
         modifier = Modifier
             .background(skin.codeBg, RoundedCornerShape(100.dp))
@@ -216,7 +216,7 @@ private fun Bubble(fromUser: Boolean, text: String, streaming: Boolean = false) 
             if (text.isEmpty() && streaming) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
+                        modifier = Modifier.size(skin.ui(12f)),
                         strokeWidth = 1.5.dp,
                         color = skin.accent,
                     )

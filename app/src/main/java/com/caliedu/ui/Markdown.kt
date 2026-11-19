@@ -7,8 +7,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -24,6 +26,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -78,15 +81,17 @@ fun parseMarkdown(source: String): List<MdNode> {
                 i++
             }
 
-            line.startsWith("$$") -> {
+            line.startsWith("$$") || line.startsWith("\\[") -> {
                 flush()
-                val body = StringBuilder(line.removePrefix("$$"))
-                while (!body.contains("$$") && i + 1 < lines.size) {
+                // 模型偶尔会用 \[ ... \] 写独立公式，一并接住，免得整行当普通文字排出来。
+                val (open, close) = if (line.startsWith("\\[")) "\\[" to "\\]" else "$$" to "$$"
+                val body = StringBuilder(line.removePrefix(open))
+                while (!body.contains(close) && i + 1 < lines.size) {
                     i++
                     body.append('\n').append(lines[i].trim())
                 }
-                val tex = body.toString().removeSuffix("$$").trim()
-                out += MdNode.Math(tex)
+                val tex = body.toString().removeSuffix(close).trim()
+                if (tex.isNotEmpty()) out += MdNode.Math(tex)
                 i++
             }
 
@@ -290,17 +295,7 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
 
                 is MdNode.Table -> TableBlock(node, skin)
 
-                is MdNode.Math -> Text(
-                    text = TexLite.convert(node.tex),
-                    fontFamily = FontFamily.Serif,
-                    fontSize = skin.bodySize * 1.08f,
-                    lineHeight = skin.bodyLine * 1.15f,
-                    color = if (skin.style == UiStyle.PRINT) skin.accentDeep else skin.text,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                )
+                is MdNode.Math -> Derivation(node.tex, skin)
 
                 MdNode.Rule -> Box(
                     Modifier
@@ -310,6 +305,32 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
                 )
             }
         }
+    }
+}
+
+/**
+ * 推导行：左边一道竖线，式子按 TeX 排出来。
+ * 竖线用 drawBehind 画，跟着内容高度走——分式一高，线也跟着高。
+ */
+@Composable
+private fun Derivation(tex: String, skin: Skin) {
+    val tone = if (skin.style == UiStyle.PRINT) skin.accentDeep else skin.text
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                drawRect(
+                    color = skin.accent.copy(alpha = 0.32f),
+                    size = androidx.compose.ui.geometry.Size(1.5.dp.toPx(), size.height),
+                )
+            }
+            .padding(start = 15.dp, top = 4.dp, bottom = 4.dp)
+    ) {
+        Tex.MathLine(
+            tex = tex,
+            size = skin.bodySize * 1.14f,
+            color = tone,
+        )
     }
 }
 
@@ -379,20 +400,20 @@ private fun CodeBlock(lang: String, code: String, skin: Skin) {
             when {
                 label != null -> Text(
                     text = label,
-                    fontSize = 11.sp,
+                    fontSize = skin.fs(11f),
                     color = CodeHi.outputTone(tag ?: "unmeasured", skin),
                 )
 
                 lang.isNotBlank() && lang != "text" -> Text(
                     text = lang,
-                    fontSize = 11.sp,
+                    fontSize = skin.fs(11f),
                     color = skin.sub,
                 )
             }
             Spacer(Modifier.weight(1f))
             Text(
                 if (copied) "已复制" else "复制",
-                fontSize = 10.5.sp,
+                fontSize = skin.fs(10.5f),
                 color = if (copied) skin.accent else skin.sub,
                 modifier = Modifier
                     .background(skin.bg.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
@@ -407,8 +428,8 @@ private fun CodeBlock(lang: String, code: String, skin: Skin) {
         Text(
             text = CodeHi.highlight(code, codeLang, skin),
             fontFamily = skin.mono,
-            fontSize = 12.5.sp,
-            lineHeight = 20.sp,
+            fontSize = skin.fs(12.5f),
+            lineHeight = skin.fs(20f),
             softWrap = true,
         )
     }
