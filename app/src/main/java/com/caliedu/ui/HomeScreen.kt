@@ -2,6 +2,7 @@ package com.caliedu.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -33,7 +34,7 @@ import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.FileOpen
-import androidx.compose.material.icons.rounded.Functions
+import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
@@ -45,11 +46,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,10 +71,8 @@ import com.caliedu.data.Stats
 fun HomeScreen(
     state: UiState,
     onInput: (String) -> Unit,
-    onStart: () -> Unit,
-    onSample: (Track) -> Unit,
+    onStart: (Track) -> Unit,
     onReview: () -> Unit,
-    onDocSample: () -> Unit,
     onMarkdown: (String, String) -> Unit,
     onResume: (LessonRecord) -> Unit,
     onMistakes: () -> Unit,
@@ -82,14 +83,18 @@ fun HomeScreen(
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
-    val stats = remember(state.records) { Stats.of(state.records) }
+    // 连续天数与「该复习几条」都随日期变，只按记录缓存会跨天不刷新。
+    val dayBucket = System.currentTimeMillis() / 86_400_000L
+    val stats = remember(state.records, dayBucket) { Stats.of(state.records) }
     val recent = remember(state.records) {
         state.records.filter { it.total > 0 }.sortedByDescending { it.updatedAt }.take(3)
     }
     val mistakeCount = remember(state.records) { state.records.sumOf { r -> r.mistakes.count { !it.fixed } } }
     val dueCount = remember(state.records) { Review.dueCount(state.records) }
     var confirmClear by remember { mutableStateOf(false) }
-    var sampleOpen by remember { mutableStateOf(false) }
+    var typeOpen by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    val focusManager = LocalFocusManager.current
     val route = remember(state.input) {
         if (state.input.isBlank()) null else TrackDetector.detect(state.input)
     }
@@ -156,15 +161,22 @@ fun HomeScreen(
         // 输入框只占够用的高度：它是入口，不是主界面。题目长的自己在框里滚。
         Box(
             Modifier
-                .height(if (recent.isEmpty()) skin.ui(172f) else skin.ui(154f))
+                .then(
+                    if (focused) {
+                        Modifier.weight(1f)
+                    } else {
+                        Modifier.height(if (recent.isEmpty()) skin.ui(172f) else skin.ui(154f))
+                    }
+                )
                 .fillMaxWidth()
                 .background(skin.surface, cardShape)
                 .let { base ->
                     if (skin.borderWidth > 0.dp) base.border(skin.borderWidth, skin.line, cardShape) else base
                 }
         ) {
-            if (state.input.isEmpty()) {
+            if (state.input.isEmpty() && !focused) {
                 // 空态不放废话：三个台阶，说明这 App 干的是「把题拆成台阶」。
+                // 聚焦后收起，否则光标在左上角、提示语在屏幕中间，像两套东西。
                 Column(
                     Modifier.align(Alignment.Center),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -187,6 +199,7 @@ fun HomeScreen(
                 cursorBrush = SolidColor(skin.accent),
                 modifier = Modifier
                     .fillMaxSize()
+                    .onFocusChanged { focused = it.isFocused }
                     .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 58.dp)
                     .verticalScroll(rememberScrollState()),
             )
@@ -226,6 +239,24 @@ fun HomeScreen(
                         Text("清空", fontSize = skin.fs(11f), color = skin.sub)
                     }
                 }
+                // 聚焦时把键盘收掉、框缩回去。系统返回键只收键盘，焦点还在，框不会退。
+                if (focused) {
+                    Spacer(Modifier.width(6.dp))
+                    Box(
+                        Modifier
+                            .size(38.dp)
+                            .background(skin.codeBg, CircleShape)
+                            .clickable { focusManager.clearFocus() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Rounded.KeyboardHide,
+                            contentDescription = "收起输入",
+                            tint = skin.sub,
+                            modifier = Modifier.size(skin.ui(17f)),
+                        )
+                    }
+                }
             }
 
             Box(
@@ -234,7 +265,14 @@ fun HomeScreen(
                     .padding(end = 12.dp, bottom = 12.dp)
                     .size(48.dp)
                     .background(if (ready) skin.accent else skin.codeBg, CircleShape)
-                    .clickable(onClick = onStart),
+                    .clickable {
+                        // 空输入时原来会走 start()，换来一句「先粘一道题」的报错。
+                        // 按钮本来就是灰的，直接不响应更符合它的样子。
+                        if (!ready) return@clickable
+                        // 先收键盘再弹选择：不然键盘会把三行选项顶掉一半。
+                        focusManager.clearFocus()
+                        typeOpen = true
+                    },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
@@ -246,67 +284,67 @@ fun HomeScreen(
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(
-                Modifier
-                    .weight(1f)
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                Chip("文件", Icons.Rounded.FileOpen, skin.sub, skin.codeBg) { picker.launch(arrayOf("*/*")) }
-                if (dueCount > 0) {
-                    Chip("复习 $dueCount", Icons.Rounded.Refresh, skin.amber, skin.amberSoft, onReview)
-                } else if (mistakeCount > 0) {
-                    Chip("错题 $mistakeCount", Icons.Rounded.AutoStories, skin.wrong, skin.wrongSoft, onMistakes)
+        // 正在打字时把下面整块收起来：输入框接管屏幕，少一半干扰。
+        AnimatedVisibility(visible = !focused) {
+            Column {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        Modifier
+                            .weight(1f)
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Chip("文件", Icons.Rounded.FileOpen, skin.sub, skin.codeBg) { picker.launch(arrayOf("*/*")) }
+                        if (dueCount > 0) {
+                            Chip("复习 $dueCount", Icons.Rounded.Refresh, skin.amber, skin.amberSoft, onReview)
+                        } else if (mistakeCount > 0) {
+                            Chip("错题 $mistakeCount", Icons.Rounded.AutoStories, skin.wrong, skin.wrongSoft, onMistakes)
+                        }
+                    }
+                    if (route != null) {
+                        Spacer(Modifier.width(10.dp))
+                        // 先说清会走哪条线：认错了题，一整套 prompt 就白花了。
+                        Text(
+                            "${route.label} · ${TrackDetector.why(route)}",
+                            fontSize = skin.fs(10.5f),
+                            color = skin.sub,
+                        )
+                    }
                 }
-            }
-            if (route != null) {
-                Spacer(Modifier.width(10.dp))
-                // 先说清会走哪条线：认错了题，一整套 prompt 就白花了。
-                Text(
-                    "${route.label} · ${TrackDetector.why(route)}",
-                    fontSize = skin.fs(10.5f),
-                    color = skin.sub,
-                )
+
+                if (recent.isNotEmpty()) {
+                    Spacer(Modifier.height(14.dp))
+                    Text(
+                        "最近",
+                        fontSize = skin.fs(11f),
+                        letterSpacing = 0.6.sp,
+                        color = skin.sub,
+                        modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+                    )
+                    recent.forEachIndexed { index, record ->
+                        RecentRow(
+                            record = record,
+                            highlighted = index == 0,
+                            onClick = { onResume(record) },
+                        )
+                        if (index != recent.lastIndex) Spacer(Modifier.height(2.dp))
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
             }
         }
-
-        Spacer(Modifier.height(12.dp))
-        SampleEntry { sampleOpen = true }
-
-        if (recent.isNotEmpty()) {
-            Spacer(Modifier.height(14.dp))
-            Text(
-                "最近",
-                fontSize = skin.fs(11f),
-                letterSpacing = 0.6.sp,
-                color = skin.sub,
-                modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
-            )
-            recent.forEachIndexed { index, record ->
-                RecentRow(
-                    record = record,
-                    highlighted = index == 0,
-                    onClick = { onResume(record) },
-                )
-                if (index != recent.lastIndex) Spacer(Modifier.height(2.dp))
-            }
-        }
-        Spacer(Modifier.height(14.dp))
     }
 
-    if (sampleOpen) {
-        SampleSheet(
-            onPick = { which ->
-                sampleOpen = false
-                when (which) {
-                    0 -> onSample(Track.CODE)
-                    1 -> onSample(Track.MATH)
-                    else -> onDocSample()
-                }
+    if (typeOpen) {
+        TypeSheet(
+            suggested = route ?: Track.GENERAL,
+            onPick = { track ->
+                typeOpen = false
+                focusManager.clearFocus()
+                onStart(track)
             },
-            onDismiss = { sampleOpen = false },
+            onDismiss = { typeOpen = false },
         )
     }
 
@@ -412,101 +450,5 @@ private fun Chip(
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(skin.ui(14f)))
         Spacer(Modifier.width(5.dp))
         Text(label, fontSize = skin.fs(12.5f), color = tint)
-    }
-}
-
-/** 「示例」单独一行：它是入口，不该混在文件、错题那排小胶囊里。 */
-@Composable
-private fun SampleEntry(onClick: () -> Unit) {
-    val skin = LocalSkin.current
-    val shape = RoundedCornerShape(skin.radiusCard)
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(skin.accentSoft, shape)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            Icons.Rounded.AutoAwesome,
-            contentDescription = null,
-            tint = skin.accent,
-            modifier = Modifier.size(skin.ui(16f)),
-        )
-        Spacer(Modifier.width(9.dp))
-        Text("示例", fontSize = skin.smallSize, color = skin.accentDeep)
-        Spacer(Modifier.weight(1f))
-        Text("三份现成的课", fontSize = skin.fs(11f), color = skin.accent.copy(alpha = 0.75f))
-        Spacer(Modifier.width(4.dp))
-        Icon(
-            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-            contentDescription = null,
-            tint = skin.accent,
-            modifier = Modifier.size(skin.ui(16f)),
-        )
-    }
-}
-
-/** 三份示例：一份是闯关，一份是纯数学推导，一份是现成的整本讲义。 */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-private fun SampleSheet(onPick: (Int) -> Unit, onDismiss: () -> Unit) {
-    val skin = LocalSkin.current
-    val state = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val rows = listOf(
-        Triple(Icons.Rounded.AutoStories, "代码闯关", "鲍鱼年龄预测 · 22 步，每步一道题"),
-        Triple(Icons.Rounded.Functions, "数学推导", "数列通项 · 8 步，全是短推导"),
-        Triple(Icons.AutoMirrored.Rounded.MenuBook, "整本讲义", "md 教程直接摊开读，不出题"),
-    )
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = state,
-        containerColor = skin.bg,
-        dragHandle = {
-            Box(Modifier.padding(vertical = 10.dp)) {
-                Box(
-                    Modifier
-                        .width(36.dp)
-                        .height(4.dp)
-                        .background(skin.line, RoundedCornerShape(2.dp))
-                )
-            }
-        },
-    ) {
-        Column(Modifier.padding(horizontal = 20.dp)) {
-            Text("示例", fontSize = skin.stepTitleSize * 0.9f, fontWeight = FontWeight.Bold, color = skin.text)
-            Spacer(Modifier.height(10.dp))
-            rows.forEachIndexed { index, (icon, title, note) ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onPick(index) }
-                        .padding(vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Box(
-                        Modifier
-                            .size(skin.ui(34f))
-                            .background(skin.accentSoft, RoundedCornerShape(9.dp)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(icon, contentDescription = null, tint = skin.accent, modifier = Modifier.size(skin.ui(17f)))
-                    }
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(title, fontSize = skin.smallSize, color = skin.text)
-                        Text(note, fontSize = skin.fs(11f), color = skin.sub)
-                    }
-                    Icon(
-                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                        contentDescription = null,
-                        tint = skin.line,
-                        modifier = Modifier.size(skin.ui(16f)),
-                    )
-                }
-            }
-            Spacer(Modifier.height(24.dp))
-        }
     }
 }

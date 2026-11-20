@@ -45,6 +45,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.UUID
 
@@ -52,6 +53,18 @@ enum class Screen { HOME, RECORDS, SETTINGS, STYLE, MODEL, LIBRARY, LESSON, PLAY
 
 /** 从资料夹导入时最多填这么多字，再多上下文撑不住，钱也撑不住。 */
 private const val MAX_IMPORT_CHARS = 12_000
+
+/**
+ * 直接粘进来的题面最多这么长。
+ *
+ * 首页的文件选择器一次能读 60 万字符，`start()` 原来对长度不设防——
+ * 粘进一份 300KB 的 txt 就会发出去几十万 token，服务端回 400，
+ * 用户看到的是一段 HTTP 报文。这里截断并明确告知，比原样发出去好。
+ */
+private const val MAX_INPUT_CHARS = 20_000
+
+/** 开放题批改最多等这么久，超时就按本地判定走。 */
+private const val GRADE_TIMEOUT_MS = 45_000L
 
 data class Feedback(val verdict: Verdict, val text: String)
 
@@ -89,6 +102,14 @@ data class UiState(
     val notes: String = "",
     val offline: Boolean = false,
     val finished: Boolean = false,
+    /**
+     * 走完之后又翻回去看。
+     *
+     * 和 [finished] 分开：finished 是「这课算完了，记录上要留着」，
+     * reviewing 是「完事了但人正在里面翻页」。回看时不能重新作答（passed 全给上），
+     * 也不能因为翻到某一步就把记录改回未完成。
+     */
+    val reviewing: Boolean = false,
     val settings: LlmSettings = LlmSettings(),
     val style: UiStyle = UiStyle.PRINT,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -122,6 +143,8 @@ data class UiState(
     val reviewDone: Boolean = false,
     /** 这一课里已经过关的步（从 0 起）。翻回去看一眼，不用把中间几步重答一遍。 */
     val passed: Set<Int> = emptySet(),
+    /** 这一课是从哪进来的：退出要回原处，从记录进来的不该被送回首页。 */
+    val lessonReturn: Screen = Screen.HOME,
     /** 复习是从首页还是记录页进来的，退出去要回到原处。 */
     val reviewReturn: Screen = Screen.RECORDS,
 ) {
@@ -147,12 +170,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val broker: RelayBroker get() = generator.relay
 
     private var work: Job? = null
+    /**
+     * 换课或退出时 +1。后台补写（预取、通读补写）拿着一份旧编号回来时，
+     * 就知道自己已经过期了——否则旧课的正文会写进新课的 contents 里。
+     */
+    private var lessonSeq = 0
     private var askWork: Job? = null
+    /** 开放题批改单独一个句柄：它没有正文可取消，但必须能被打断、也必须能超时。 */
+    private var gradeWork: Job? = null
     private var ticker: Job? = null
     private val inflight = mutableSetOf<Int>()
+    /** 正在补写的步号。单个 Int 挡不住「先点第 5 步再点第 8 步」。 */
+    private val filling = mutableSetOf<Int>()
+    /** 记录写满被淘汰时只提醒一次，否则每答一题弹一次。 */
+    private var evictWarned = false
 
     var state by mutableStateOf(UiState())
         private set
+
+    private fun switchLesson() {
+        lessonSeq++
+        inflight.clear()
+        filling.clear()
+        gradeWork?.cancel()
+        gradeWork = null
+    }
+
+    /** 从记录页点进来的课，退出就该回记录页；其余都回首页。 */
+    private fun lessonReturnOf(): Screen =
+        if (state.screen == Screen.RECORDS) Screen.RECORDS else Screen.HOME
 
     init {
         viewModelScope.launch {
@@ -256,16 +302,31 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
         Screen.LESSON -> {
             work?.cancel()
+            askWork?.cancel()
+            askWork = null
             broker.cancel()
             endLoading()
             persist()
+            switchLesson()
+            val backTo = state.lessonReturn
             state = state.copy(
-                screen = Screen.HOME,
-                plan = null,
-                contents = emptyMap(),
-                finished = false,
-                reading = false,
+                screen = backTo,
+                // 出栈动画还有 280ms。这时候 lesson 的那几个可见字段一个都不能动：
+                // 清 finished 会让「走完了」那一屏变回正文，清 reading 会从通读弹回单步，
+                // 清 draft / passed / feedback 会让用户刚写完的答案和判定当场消失——
+                // 于是滑出去的根本不是他刚才看的那个界面。
+                // 下一课进来时 startSample / openNew / openRecord 都会整份重置。
                 recordId = "",
+                lessonReturn = Screen.HOME,
+                // 退出时把加载态一并按死：不让「正在读题」跟着回到首页。
+                loading = null,
+                seconds = 0,
+                // 追问是盖在上面的弹层，退出时必须收起；其余一概留给动画。
+                askOpen = false,
+                asking = false,
+                askMessages = emptyList(),
+                askInput = "",
+                askPartial = "",
             )
             refreshRecords()
             true
@@ -398,23 +459,25 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun startSample(track: Track = Track.CODE) {
         work?.cancel()
         endLoading()
-        // 已经有一份没走完的同类示例就接着走，别每次点「示例」都堆一条新记录。
+        val sample: Sample = if (track == Track.MATH) MathSample else SampleLesson
+        // 同一份示例只留一条记录：反复点示例不该堆出一串一模一样的课。
         val existing = state.records.firstOrNull {
-            it.offline && !it.finished && it.plan.steps.isNotEmpty() && Track.of(it.plan.kind) == track
+            it.offline && it.plan.title == sample.plan.title && Track.of(it.plan.kind) == track
         }
-        if (existing != null) {
+        // 没走完的接着走；已经走完的重跑，但复用同一条记录。
+        if (existing != null && !existing.finished) {
             openRecord(existing)
             return
         }
-        val sample: Sample = if (track == Track.MATH) MathSample else SampleLesson
+        switchLesson()
         val now = System.currentTimeMillis()
         val record = LessonRecord(
-            id = UUID.randomUUID().toString(),
+            id = existing?.id ?: UUID.randomUUID().toString(),
             title = sample.plan.title,
             oneLine = sample.plan.oneLine,
             source = "内置示例",
             offline = true,
-            createdAt = now,
+            createdAt = existing?.createdAt ?: now,
             updatedAt = now,
             plan = sample.plan,
         )
@@ -428,12 +491,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             draft = "",
             notes = "",
             finished = false,
+            reviewing = false,
             reading = false,
             recordId = record.id,
+            lessonReturn = lessonReturnOf(),
             solved = 0,
             wrongs = 0,
             mistakes = emptyList(),
             passed = emptySet(),
+            waitingStep = -1,
         )
         saveRecord(record)
     }
@@ -468,6 +534,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         work?.cancel()
         endLoading()
         val doc = MdLesson.parse(raw, name)
+        // 同一份讲义（标题 + 原文长度相同）再打开一次，接着上次读到的地方，
+        // 而不是复制一份 176KB 的原文进记录。
+        val same = state.records.firstOrNull {
+            it.offline && it.plan.title == doc.plan.title && it.source.length == raw.length
+        }
+        if (same != null) {
+            openRecord(refreshDoc(same, doc, raw))
+            return
+        }
+        switchLesson()
         if (doc.plan.steps.isEmpty()) {
             state = state.copy(error = "这份 Markdown 里没找到可分节的小标题（## ）。")
             return
@@ -494,8 +570,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             draft = "",
             notes = "",
             finished = false,
+            reviewing = false,
             reading = false,
             recordId = record.id,
+            lessonReturn = lessonReturnOf(),
             solved = 0,
             wrongs = 0,
             mistakes = emptyList(),
@@ -504,11 +582,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         saveRecord(record)
     }
 
-    fun start() {
-        val text = state.input.trim()
-        if (text.isBlank()) {
+    fun start(track: Track? = null) {
+        val raw = state.input.trim()
+        if (raw.isBlank()) {
             state = state.copy(error = "先粘一道题，或者一段代码。")
             return
+        }
+        val text = if (raw.length > MAX_INPUT_CHARS) {
+            val cut = raw.take(MAX_INPUT_CHARS)
+            state = state.copy(input = cut)
+            toast("题面 ${raw.length} 字，只取了前 $MAX_INPUT_CHARS 字")
+            cut
+        } else {
+            raw
         }
         work?.cancel()
         work = viewModelScope.launch {
@@ -520,7 +606,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             beginLoading("正在读题")
             try {
-                openNew(generator.analyze(settings, text), text)
+                openNew(generator.analyze(settings, text, track), text)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -531,6 +617,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 拆题成功之后：建记录、进学习页、写第一步。手输的题和同类题共用这一段。 */
     private fun openNew(plan: LessonPlan, source: String) {
+        switchLesson()
         val now = System.currentTimeMillis()
         val record = LessonRecord(
             id = UUID.randomUUID().toString(),
@@ -544,6 +631,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         )
         state = state.copy(
             plan = plan,
+            // 必须清空：从「练一道同类的」进来时，上一课的 contents 还在，
+            // 新第 1 步的编号同样是 1，会直接把旧课的正文顶上来。
+            contents = emptyMap(),
             screen = Screen.LESSON,
             offline = false,
             progress = Progress(),
@@ -551,12 +641,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             draft = "",
             notes = "",
             finished = false,
+            reviewing = false,
             reading = false,
             recordId = record.id,
+            lessonReturn = lessonReturnOf(),
             solved = 0,
             wrongs = 0,
             mistakes = emptyList(),
             passed = emptySet(),
+            waitingStep = -1,
+            askOpen = false,
+            asking = false,
+            askMessages = emptyList(),
+            askInput = "",
+            askPartial = "",
         )
         saveRecord(record)
         endLoading()
@@ -585,7 +683,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val settings = store.current()
                 val text = generator.variant(settings, plan, state.notes)
-                openNew(generator.analyze(settings, text), text)
+                // 同类题沿用原题的题型，不重新猜：模型改写时可能把代码题写成应用题。
+                openNew(generator.analyze(settings, text, Track.of(plan.kind)), text)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -604,11 +703,28 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun loadStep(index: Int) {
         val plan = state.plan ?: return
         if (index !in plan.steps.indices) return
+        // 换了步，上一段的追问就不再是「关于这一步」的了，留着会答串题。
+        askWork?.cancel()
+        askWork = null
+        // 走完的课点目录跳进来，是回看，不是把这一课重新打开：
+        // 已过的步全给上，题目不再要求作答，记录也保持「已完成」。
+        val reviewing = state.reviewing || state.finished
         state = state.copy(
             progress = Progress(idx = index),
             feedback = null,
             draft = "",
             finished = false,
+            reviewing = reviewing,
+            passed = if (reviewing && state.passed.size < plan.steps.size) {
+                plan.steps.indices.toSet()
+            } else {
+                state.passed
+            },
+            askOpen = false,
+            asking = false,
+            askMessages = emptyList(),
+            askInput = "",
+            askPartial = "",
         )
         persist()
         val brief = plan.steps[index]
@@ -619,11 +735,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         if (state.offline) return
 
         work?.cancel()
+        val seq = lessonSeq
         work = viewModelScope.launch {
             beginLoading("正在写第 ${brief.n} 步")
             try {
                 val settings = store.current()
                 val content = generator.teach(settings, plan, brief, state.notes)
+                if (seq != lessonSeq) return@launch
                 state = state.copy(contents = state.contents + (brief.n to content))
                 persist()
                 endLoading()
@@ -641,31 +759,43 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val plan = state.plan ?: return
         val brief = plan.steps.getOrNull(index) ?: return
         if (state.contents.containsKey(brief.n) || state.offline) return
-        if (state.waitingStep == brief.n) return
+        // 用集合挡并发：只用一个 waitingStep 的话，先点第 5 步再点第 8 步，
+        // 第 5 步写完会把 waitingStep 清成 -1，同一步就能被再点一次，白花一份 token。
+        if (!filling.add(brief.n)) return
+        val seq = lessonSeq
         viewModelScope.launch {
             state = state.copy(waitingStep = brief.n, error = null)
             try {
                 val settings = store.current()
                 val content = generator.teach(settings, plan, brief, state.notes)
+                if (seq != lessonSeq) return@launch
                 state = state.copy(contents = state.contents + (brief.n to content), waitingStep = -1)
                 persist()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (seq != lessonSeq) return@launch
                 state = state.copy(waitingStep = -1)
                 fail(e)
+            } finally {
+                filling.remove(brief.n)
             }
         }
     }
 
     private fun prefetch(plan: LessonPlan, index: Int) {
         if (state.offline) return
+        // 接力模式下每写一步都要人肉转一趟。提前把下一步的提示词弹出来，
+        // 用户还没读完当前这一步，屏幕就被接力页盖住了。
+        if (state.settings.mode != ChannelMode.DIRECT) return
         val brief = plan.steps.getOrNull(index) ?: return
         if (state.contents.containsKey(brief.n) || !inflight.add(brief.n)) return
+        val seq = lessonSeq
         viewModelScope.launch {
             try {
                 val settings = store.current()
                 val content = generator.teach(settings, plan, brief, state.notes)
+                if (seq != lessonSeq) return@launch
                 state = state.copy(contents = state.contents + (brief.n to content))
                 persist()
             } catch (e: CancellationException) {
@@ -683,6 +813,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val content = state.content ?: return
         val brief = state.brief ?: return
         if (state.progress.canAdvance) return
+        // 批改还没回来就再点一次，会叠出第二个请求。
+        if (state.grading) return
         val local = Judge.judge(content.question, value)
 
         if (local == Verdict.CORRECT) {
@@ -695,9 +827,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         // 本地判不准，交给模型复核一次。批改失败就当没发生，不能把学生卡住。
-        viewModelScope.launch {
+        val seq = lessonSeq
+        val stepAtSubmit = state.progress.idx
+        gradeWork?.cancel()
+        gradeWork = viewModelScope.launch {
             state = state.copy(grading = true)
-            val grade = runCatching { generator.grade(state.settings, brief, content.question, value) }.getOrNull()
+            // 读超时是 10 分钟。不设上限的话，一次挂死的批改会让「提交」一直灰着。
+            val grade = withTimeoutOrNull(GRADE_TIMEOUT_MS) {
+                runCatching { generator.grade(state.settings, brief, content.question, value) }.getOrNull()
+            }
+            // 这期间用户可能换了课、也可能翻到了别的步，结果不能再写回去。
+            if (seq != lessonSeq || state.progress.idx != stepAtSubmit) {
+                if (seq == lessonSeq) state = state.copy(grading = false)
+                return@launch
+            }
             state = state.copy(grading = false)
             if (grade?.verdict == Verdict.CORRECT) {
                 accept(value, grade.note.ifBlank { content.onCorrect })
@@ -752,13 +895,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             progress = progressed,
             // 连错三次把答案给出来，这一步就算过去了；否则离开再回来还得再错三次。
             passed = if (progressed.revealed) state.passed + state.progress.idx else state.passed,
-            feedback = Feedback(if (progressed.revealed) Verdict.CORRECT else verdict, text),
+            // 公布答案不等于答对。用中性色，别让学生以为自己做对了。
+            feedback = Feedback(if (progressed.revealed) Verdict.PARTIAL else verdict, text),
             draft = value,
             notes = state.notes + "第 ${state.progress.idx + 1} 步答错：$value\n",
             wrongs = state.wrongs + 1,
             mistakes = if (duplicate) state.mistakes else (state.mistakes + mistake).takeLast(80),
         )
         persist()
+    }
+
+    /** 回看中途想退出：回到「走完了」那一屏，记录仍然是已完成。 */
+    fun endReview() {
+        if (!state.reviewing) return
+        state = state.copy(reviewing = false, finished = true)
+        persist(finished = true)
+        refreshRecords()
     }
 
     fun askHint() {
@@ -781,12 +933,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val nextIndex = state.progress.idx + 1
         if (nextIndex >= plan.steps.size) {
+            // 回看走到最后一节，回的是「走完了」那一屏，不是把这一课再结一次。
+            if (state.reviewing) {
+                state = state.copy(finished = true, reviewing = false)
+                persist(finished = true)
+                return
+            }
             state = state.copy(finished = true)
             persist(finished = true)
             refreshRecords()
             return
         }
         loadStep(nextIndex)
+    }
+
+    /**
+     * 走完之后回看。
+     *
+     * 记录里存着整份讲义，翻一遍不该再花钱重新生成。
+     * 这里只是把游标挪回第一步，并把这课标成「已完成、正在翻」。
+     */
+    fun reviewSteps() {
+        val plan = state.plan ?: return
+        if (plan.steps.isEmpty()) return
+        state = state.copy(
+            finished = false,
+            reviewing = true,
+            progress = Progress(idx = 0),
+            passed = plan.steps.indices.toSet(),
+            draft = "",
+            feedback = null,
+        )
+        persist(finished = true)
     }
 
     // ---------------------------------------------------------------- 追问
@@ -956,11 +1134,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val list = runCatching { lessons.all() }.getOrDefault(emptyList())
             state = state.copy(records = list)
+            reportStoreIssues()
         }
     }
 
     fun openRecord(record: LessonRecord) {
+        if (record.plan.steps.isEmpty()) {
+            state = state.copy(error = "这条记录里没有步骤，可能已经损坏。")
+            return
+        }
         work?.cancel()
+        switchLesson()
         endLoading()
         // 讲义型记录只存了原文，正文在打开时重新切一遍
         val restored = if (record.contents.isEmpty() && isDocPlan(record)) {
@@ -978,11 +1162,19 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             draft = "",
             notes = "",
             finished = record.finished,
+            reviewing = false,
             reading = false,
             recordId = record.id,
+            lessonReturn = lessonReturnOf(),
             solved = record.solved,
             wrongs = record.wrongs,
             mistakes = record.mistakes,
+            waitingStep = -1,
+            askOpen = false,
+            asking = false,
+            askMessages = emptyList(),
+            askInput = "",
+            askPartial = "",
             passed = when {
                 record.passed.isNotEmpty() -> record.passed.toSet()
                 // 旧记录只有 cursor：走到第 N 步，就当前面都过了，不然一打开全是没答的。
@@ -991,6 +1183,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 else -> emptySet()
             },
         )
+    }
+
+    /**
+     * 讲义记录的 plan / contents 都是从 source 解析出来的派生数据。
+     *
+     * 解析规则改过之后，旧记录还停在旧的分节上——用户打开看到的仍是那堆
+     * 被代码注释切碎的碎节。所以结构变了就按新解析重建一次，进度和错题留着。
+     * 结构没变则一个字都不动：用户手动改过的分类不能被覆盖掉。
+     */
+    private fun refreshDoc(record: LessonRecord, doc: MdLesson.Doc, raw: String): LessonRecord {
+        if (doc.plan.steps.isEmpty()) return record
+        val sameShape = record.plan.steps.size == doc.plan.steps.size &&
+            record.plan.steps.map { it.title } == doc.plan.steps.map { it.title }
+        if (sameShape) return record
+
+        val updated = record.copy(
+            title = doc.plan.title,
+            oneLine = doc.plan.oneLine,
+            source = raw,
+            plan = doc.plan,
+            contents = doc.contents,
+            cursor = record.cursor.coerceIn(0, doc.plan.steps.lastIndex),
+            passed = record.passed.filter { it < doc.plan.steps.size },
+            updatedAt = System.currentTimeMillis(),
+        )
+        viewModelScope.launch {
+            lessons.save(updated)
+            refreshRecords()
+        }
+        return updated
     }
 
     private fun isDocPlan(record: LessonRecord): Boolean =
@@ -1019,15 +1241,38 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun saveRecord(record: LessonRecord) {
         viewModelScope.launch {
-            lessons.save(record)
+            val evicted = lessons.save(record)
+            reportStoreIssues(evicted)
             state = state.copy(
                 records = (state.records.filterNot { it.id == record.id } + record).sortedByDescending { it.updatedAt }
             )
         }
     }
 
+    /**
+     * 存储层出问题时说一次。
+     *
+     * 这三件事原来都是静默的：写盘失败、记录文件损坏、超出上限被淘汰。
+     * 用户看到的现象分别是「白答了」「历史全没了」「最旧的一课不见了」，
+     * 如果不说明，只会以为 App 有 bug。
+     */
+    private fun reportStoreIssues(evicted: Int = 0) {
+        lessons.lastWriteError?.let { reason ->
+            toast("记录没能写进磁盘：$reason")
+            return
+        }
+        lessons.consumeQuarantine()?.let { name ->
+            toast("上一次的记录文件读不出来，已备份为 $name")
+            return
+        }
+        if (evicted > 0 && !evictWarned) {
+            evictWarned = true
+            toast("记录最多 ${LessonStore.MAX} 条，最旧的 $evicted 条已移出")
+        }
+    }
+
     /** 把当前状态写回记录。没有记录 id 时什么也不做（比如示例课刚进来的瞬间）。 */
-    private fun persist(finished: Boolean = state.finished) {
+    private fun persist(finished: Boolean = state.finished || state.reviewing) {
         val plan = state.plan ?: return
         val id = state.recordId
         if (id.isBlank()) return
@@ -1047,7 +1292,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             passed = state.passed.sorted(),
         )
         viewModelScope.launch {
-            lessons.save(record)
+            val evicted = lessons.save(record)
+            reportStoreIssues(evicted)
             state = state.copy(
                 records = (state.records.filterNot { it.id == record.id } + record).sortedByDescending { it.updatedAt }
             )
@@ -1069,6 +1315,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun relayCancel() {
         broker.cancel()
+        // 只取消 gate 不会走到 fail()：CancellationException 是被重抛的，
+        // endLoading() 于是永远不执行，全屏浮层就停在「正在读题」上一直数秒。
+        work?.cancel()
+        work = null
+        endLoading()
         state = state.copy(error = "这一步取消了。可以重新点开始。")
     }
 
@@ -1087,10 +1338,17 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return writeFile(safeName(plan.title) + ".html", text)
     }
 
-    private fun writeFile(name: String, text: String): File? = runCatching {
-        val dir = File(getApplication<Application>().cacheDir, "exports").apply { mkdirs() }
-        File(dir, name).apply { writeText(text, Charsets.UTF_8) }
-    }.getOrNull()
+    private fun writeFile(name: String, text: String): File? {
+        val dir = File(getApplication<Application>().cacheDir, "exports")
+        return runCatching {
+            dir.mkdirs()
+            File(dir, name).apply { writeText(text, Charsets.UTF_8) }
+        }.getOrElse { e ->
+            // 原来返回 null 时调用方什么都不做，用户点了「导出」毫无反应。
+            toast("导出失败：${e.message ?: "存储空间不足"}")
+            null
+        }
+    }
 
     private fun safeName(raw: String): String {
         val cleaned = raw.map { if (it.isLetterOrDigit() || it == '-' || it == '_') it else '_' }.joinToString("")
@@ -1113,8 +1371,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun cancel() {
         work?.cancel()
+        gradeWork?.cancel()
         broker.cancel()
         endLoading()
+        // 在课里取消（写某一步时），要留一个「重试」出口；
+        // 否则正文区会一直转圈，因为没有任何协程还在补它。
+        if (state.screen == Screen.LESSON && state.content == null) {
+            state = state.copy(error = "这一步停下了。可以重试。")
+        }
     }
 
     private fun beginLoading(label: String) {

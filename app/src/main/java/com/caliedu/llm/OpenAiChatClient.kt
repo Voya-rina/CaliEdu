@@ -85,6 +85,34 @@ class OpenAiChatClient(private val settings: LlmSettings) : ChatChannel {
         return if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
     }
 
+    /**
+     * Key 是明文放进 Authorization 头的。
+     *
+     * 发到公网还走 http://，等于把 Key 明文交给路上任何一个节点；本机或局域网
+     * 自建模型（LM Studio、Ollama）通常只有 http，那些必须放行。
+     * 所以这里只挡「公网 + 明文」，不动本地。
+     */
+    private fun guardPlainText() {
+        val url = runCatching { java.net.URL(endpoint()) }.getOrNull() ?: return
+        if (url.protocol != "http") return
+        if (isLocalHost(url.host)) return
+        throw ChatException(
+            "${url.host} 是公网地址，用 http 会把 Key 明文发出去。改成 https:// 再试。"
+        )
+    }
+
+    private fun isLocalHost(host: String): Boolean {
+        val h = host.lowercase().trim('[', ']')
+        if (h == "localhost" || h == "127.0.0.1" || h == "::1" || h == "10.0.2.2") return true
+        val parts = h.split('.').mapNotNull { it.toIntOrNull() }
+        if (parts.size != 4) return false
+        val (a, b) = parts
+        return a == 10 ||
+            a == 127 ||
+            (a == 192 && b == 168) ||
+            (a == 172 && b in 16..31)
+    }
+
     override suspend fun complete(system: String, user: String, json: Boolean, label: String): String {
         return try {
             send(system, user, jsonMode = json)
@@ -116,6 +144,7 @@ class OpenAiChatClient(private val settings: LlmSettings) : ChatChannel {
      * 用同步 execute 而不是 enqueue，因为要边读边吐；协程取消时关掉连接即可。
      */
     override suspend fun stream(system: String, user: String, onDelta: (String) -> Unit): String {
+        guardPlainText()
         val request = Request.Builder()
             .url(endpoint())
             .addHeader("Authorization", "Bearer ${settings.apiKey}")
@@ -152,6 +181,7 @@ class OpenAiChatClient(private val settings: LlmSettings) : ChatChannel {
     }
 
     private suspend fun send(system: String, user: String, jsonMode: Boolean): String {
+        guardPlainText()
         val request = Request.Builder()
             .url(endpoint())
             .addHeader("Authorization", "Bearer ${settings.apiKey}")

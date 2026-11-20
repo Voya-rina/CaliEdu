@@ -9,9 +9,11 @@ import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.caliedu.ui.UiStyle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -71,11 +73,23 @@ class SettingsStore(private val context: Context) {
     private val keyScale = floatPreferencesKey("text_scale")
     private val keyLibrary = stringPreferencesKey("pdf_library")
 
+    /** 解一次密要进 Keystore，而 DataStore 每次改风格/字号都会重新发一遍，缓存住省这趟。 */
+    private var sealed: String? = null
+    private var plain: String = ""
+
+    private fun reveal(stored: String): String {
+        if (stored == sealed) return plain
+        val opened = SecretBox.open(stored)
+        sealed = stored
+        plain = opened
+        return opened
+    }
+
     val flow: Flow<LlmSettings> = context.dataStore.data.map { p ->
         val base = LlmSettings()
         LlmSettings(
             baseUrl = p[keyBase] ?: base.baseUrl,
-            apiKey = p[keyApi] ?: "",
+            apiKey = reveal(p[keyApi] ?: ""),
             model = p[keyModel] ?: base.model,
             mode = ChannelMode.of(p[keyMode]),
             autoGrade = p[keyGrade] ?: true,
@@ -101,10 +115,12 @@ class SettingsStore(private val context: Context) {
     suspend fun currentStyle(): UiStyle = styleFlow.first()
 
     suspend fun save(settings: LlmSettings) {
+        // 加密走 IO：首次生成 Keystore 密钥可能要几十毫秒，别卡在界面上。
+        val sealedKey = withContext(Dispatchers.IO) { SecretBox.seal(settings.apiKey.trim()) }
         context.dataStore.edit { p ->
             p[keyBase] = settings.baseUrl.trim()
             p[keyModel] = settings.model.trim()
-            p[keyApi] = settings.apiKey.trim()
+            p[keyApi] = sealedKey
             p[keyMode] = settings.mode.key
             p[keyGrade] = settings.autoGrade
             p[keyRun] = settings.runCode

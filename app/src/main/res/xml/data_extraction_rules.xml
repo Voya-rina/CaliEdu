@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置里存着模型地址与 Key。Key 本身已经用 Keystore 加密，密文离开设备也解不开，
+  但「只存在这台手机上」这句话要真的成立，就不能让这个文件被同步到云端。
+  代价是换机后风格、字号、选过的资料夹要重新设一遍——比泄露 Key 划算。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="datastore/settings.preferences_pb" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="datastore/settings.preferences_pb" />
+    </device-transfer>
+</data-extraction-rules>

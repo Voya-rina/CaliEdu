@@ -31,11 +31,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.caliedu.AskMessage
@@ -55,14 +62,27 @@ fun AskSheet(
     onInput: (String) -> Unit,
     onSend: () -> Unit,
     onDismiss: () -> Unit,
+    showSymbols: Boolean = false,
 ) {
     val skin = LocalSkin.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val listState = rememberLazyListState()
 
+    // 和答题框一样：符号要插到光标处，得拿着选区。
+    var field by remember { mutableStateOf(TextFieldValue(input)) }
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(input) {
+        if (field.text != input) field = TextFieldValue(input, TextRange(input.length))
+    }
+
     LaunchedEffect(messages.size, partial.length) {
         val total = messages.size + if (partial.isNotEmpty() || asking) 1 else 0
-        if (total > 0) runCatching { listState.scrollToItem(total - 1) }
+        if (total <= 0) return@LaunchedEffect
+        // 只有本来就在底部才跟着滚。正在往上翻旧对话时被拽回底部，比不滚更烦。
+        val info = listState.layoutInfo
+        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+        val nearBottom = lastVisible < 0 || lastVisible >= info.totalItemsCount - 2
+        if (nearBottom) runCatching { listState.scrollToItem(total - 1) }
     }
 
     ModalBottomSheet(
@@ -124,6 +144,17 @@ fun AskSheet(
             }
 
             Spacer(Modifier.height(8.dp))
+            if (showSymbols) {
+                SymbolStrip(
+                    enabled = !asking,
+                    onInsert = { item ->
+                        val next = field.insertSymbol(item, focused)
+                        field = next
+                        onInput(next.text)
+                    },
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             Row(verticalAlignment = Alignment.Bottom) {
                 Box(
                     Modifier
@@ -136,12 +167,17 @@ fun AskSheet(
                         Text("问一句，只关于这一步", fontSize = skin.smallSize, color = skin.sub)
                     }
                     BasicTextField(
-                        value = input,
-                        onValueChange = onInput,
+                        value = field,
+                        onValueChange = { value ->
+                            field = value
+                            onInput(value.text)
+                        },
                         textStyle = TextStyle(fontSize = skin.bodySize, lineHeight = skin.bodyLine, color = skin.text),
                         cursorBrush = SolidColor(skin.accent),
                         maxLines = 4,
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { focused = it.isFocused },
                     )
                 }
                 Spacer(Modifier.width(8.dp))

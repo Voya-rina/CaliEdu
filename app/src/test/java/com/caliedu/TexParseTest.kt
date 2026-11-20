@@ -3,6 +3,7 @@ package com.caliedu
 import com.caliedu.ui.Tex
 import com.caliedu.ui.TexNode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -86,5 +87,43 @@ class TexParseTest {
     fun namesAreNotSwallowed() {
         // \le 是符号，\left( 是括号，别把 left 当成未知命令吐出来
         assertEquals("(", (parse("\\left( x \\right)").first() as TexNode.Run).text)
+    }
+
+    /** 认不出的命令必须消失。把 "quad"、"hat" 印在正文里，看上去就是渲染坏了。 */
+    @Test
+    fun unknownCommandsLeaveNothingBehind() {
+        val unknown = parse("\\foo \\bar{x} \\baz")
+        val text = unknown.filterIsInstance<TexNode.Run>().joinToString("") { it.text }
+        assertFalse("未知命令漏出来了：$text", text.contains("foo"))
+        assertFalse("未知命令漏出来了：$text", text.contains("baz"))
+    }
+
+    @Test
+    fun spacingCommandsBecomeSpace() {
+        val nodes = parse("a \\quad b")
+        val text = nodes.filterIsInstance<TexNode.Run>().joinToString("") { it.text }
+        assertTrue("应为 'a  b'，实际 '$text'", text.contains(" "))
+        assertFalse(text.contains("quad"))
+    }
+
+    @Test
+    fun accentKeepsItsArgument() {
+        // 帽子横线画不出来，但被装饰的字母不能跟着丢
+        val nodes = parse("\\hat{y}")
+        val text = nodes.filterIsInstance<TexNode.Group>().flatMap { it.items }
+            .filterIsInstance<TexNode.Run>().joinToString("") { it.text }
+        assertEquals("y", text)
+    }
+
+    @Test
+    fun blackboardBoldMapsToUnicode() {
+        val run = parse("\\mathbb{R}")[0] as TexNode.Run
+        assertEquals("ℝ", run.text)
+    }
+
+    @Test
+    fun doubleBackslashBreaksTheLine() {
+        val nodes = parse("a \\\\ b")
+        assertTrue("应含 Break 节点，实际 $nodes", nodes.any { it is TexNode.Break })
     }
 }

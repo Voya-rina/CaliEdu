@@ -171,7 +171,11 @@ fun parseMarkdown(source: String): List<MdNode> {
 }
 
 fun inlineMarkdown(source: String, skin: Skin): AnnotatedString {
-    val text = source.replace("**", "\u0001").replace("`", "\u0002")
+    // \u0003 是转义后的字面美元号：\$5 应该原样显示 $5，不能和公式的 $ 配对。
+    val text = source
+        .replace("\\$", "\u0003")
+        .replace("**", "\u0001")
+        .replace("`", "\u0002")
     val out = AnnotatedString.Builder()
     var bold = false
     var i = 0
@@ -203,17 +207,46 @@ fun inlineMarkdown(source: String, skin: Skin): AnnotatedString {
                 }
             }
 
+            c == '\u0003' -> {
+                out.append('$')
+                i++
+            }
+
+            // 模型也常写 \( ... \) 和 \[ ... \]，一并当公式接住，别把反斜杠印出来。
+            c == '\\' && i + 1 < text.length && (text[i + 1] == '(' || text[i + 1] == '[') -> {
+                val close = if (text[i + 1] == '(') "\\)" else "\\]"
+                val end = text.indexOf(close, i + 2)
+                if (end > i + 2) {
+                    out.pushStyle(mathStyle(skin))
+                    out.append(TexLite.convert(text.substring(i + 2, end)))
+                    out.pop()
+                    i = end + 2
+                } else {
+                    out.append(c)
+                    i++
+                }
+            }
+
+            // 段落中间夹的 $$...$$：块级解析只在行首认它，这里兜住剩下的。
+            text.startsWith("$$", i) -> {
+                val end = text.indexOf("$$", i + 2)
+                if (end > i + 2) {
+                    out.pushStyle(mathStyle(skin))
+                    out.append(TexLite.convert(text.substring(i + 2, end)))
+                    out.pop()
+                    i = end + 2
+                } else {
+                    out.append('$')
+                    i++
+                }
+            }
+
             c == '$' -> {
                 val end = text.indexOf('$', i + 1)
-                if (end > i + 1) {
-                    out.pushStyle(
-                        SpanStyle(
-                            fontFamily = FontFamily.Serif,
-                            fontSize = skin.bodySize * 1.02f,
-                            color = if (skin.style == UiStyle.PRINT) skin.accentDeep else skin.text,
-                        )
-                    )
-                    out.append(TexLite.convert(text.substring(i + 1, end)))
+                val body = if (end > i + 1) text.substring(i + 1, end) else ""
+                if (looksLikeMath(body)) {
+                    out.pushStyle(mathStyle(skin))
+                    out.append(TexLite.convert(body))
                     out.pop()
                     i = end + 1
                 } else {
@@ -237,6 +270,26 @@ fun inlineMarkdown(source: String, skin: Skin): AnnotatedString {
     return out.toAnnotatedString()
 }
 
+/**
+ * 一对 `$` 之间的内容到底是不是公式。
+ *
+ * 中文段落里美元号更常见的是钱：`价格 $5，另一件 $8` 如果当公式算，
+ * 中间那一段会被塞进公式字体，读起来像排版坏了。宁可漏排一个公式，
+ * 也不要把正常句子切开——所以这里只做保守判断。
+ */
+private fun looksLikeMath(body: String): Boolean {
+    if (body.isEmpty() || body.length > 90) return false
+    if (body.contains('\n')) return false
+    if (body.any { it in '\u4e00'..'\u9fff' } && !body.contains('\\')) return false
+    return true
+}
+
+private fun mathStyle(skin: Skin) = SpanStyle(
+    fontFamily = FontFamily.Serif,
+    fontSize = skin.bodySize * 1.02f,
+    color = if (skin.style == UiStyle.PRINT) skin.accentDeep else skin.text,
+)
+
 @Composable
 fun Markdown(source: String, modifier: Modifier = Modifier) {
     val skin = LocalSkin.current
@@ -246,16 +299,20 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
             when (node) {
                 is MdNode.Head -> HeadBlock(node, skin)
 
-                is MdNode.Para -> Text(
-                    text = inlineMarkdown(node.text, skin),
-                    fontSize = skin.bodySize,
-                    lineHeight = skin.bodyLine,
-                    color = skin.text,
-                    textAlign = if (skin.justify) TextAlign.Justify else TextAlign.Start,
-                )
+                is MdNode.Para -> {
+                    val styled = remember(node.text, skin) { inlineMarkdown(node.text, skin) }
+                    Text(
+                        text = styled,
+                        fontSize = skin.bodySize,
+                        lineHeight = skin.bodyLine,
+                        color = skin.text,
+                        textAlign = if (skin.justify) TextAlign.Justify else TextAlign.Start,
+                    )
+                }
 
                 is MdNode.Bullet -> Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     node.items.forEach { item ->
+                        val styled = remember(item, skin) { inlineMarkdown(item, skin) }
                         Row {
                             Text(
                                 text = if (node.ordered) "" else "·",
@@ -265,7 +322,7 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
                                 modifier = Modifier.width(if (node.ordered) 0.dp else 14.dp),
                             )
                             Text(
-                                text = inlineMarkdown(item, skin),
+                                text = styled,
                                 fontSize = skin.bodySize,
                                 lineHeight = skin.bodyLine,
                                 color = skin.text,
@@ -285,8 +342,9 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
                             .background(if (skin.style == UiStyle.PRINT) skin.amber else skin.line)
                     )
                     Spacer(Modifier.width(12.dp))
+                    val styled = remember(node.text, skin) { inlineMarkdown(node.text, skin) }
                     Text(
-                        text = inlineMarkdown(node.text, skin),
+                        text = styled,
                         fontSize = skin.bodySize * 0.97f,
                         lineHeight = skin.bodyLine,
                         color = skin.sub,
@@ -342,9 +400,10 @@ private fun HeadBlock(node: MdNode.Head, skin: Skin) {
         else -> skin.bodySize * 1.06f
     }
     val color = if (node.level <= 2) skin.accentDeep else skin.text
+    val styled = remember(node.text, skin) { inlineMarkdown(node.text, skin) }
     val body: @Composable () -> Unit = {
         Text(
-            text = inlineMarkdown(node.text, skin),
+            text = styled,
             fontSize = size,
             lineHeight = size * 1.45f,
             fontWeight = if (node.level <= 2) FontWeight.Bold else skin.stepTitleWeight,

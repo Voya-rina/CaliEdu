@@ -43,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -98,8 +99,17 @@ fun CaliEduApp(
         val docked = state.screen == Screen.HOME || state.screen == Screen.RECORDS || state.screen == Screen.SETTINGS
         val relay = state.relay
 
-        BackHandler(enabled = state.screen != Screen.HOME || relay != null) {
-            if (relay != null) vm.relayCancel() else vm.back()
+        // 加载浮层盖着的时候，返回键先当作「取消」——否则会直接把 App 退掉，
+        // 下次进来还留着上一次的「正在读题」。
+        BackHandler(
+            enabled = state.screen != Screen.HOME || relay != null || state.loading != null
+        ) {
+            when {
+                relay != null -> vm.relayCancel()
+                // 只有停在首页时才把返回当取消；课里按返回就是退出这节课。
+                state.loading != null && state.screen == Screen.HOME -> vm.cancel()
+                else -> vm.back()
+            }
         }
 
         Column(
@@ -132,9 +142,7 @@ fun CaliEduApp(
                             state = state,
                             onInput = vm::onInput,
                             onStart = vm::start,
-                            onSample = vm::startSample,
                             onReview = vm::startReview,
-                            onDocSample = vm::startDocSample,
                             onMarkdown = vm::openMarkdown,
                             onResume = vm::openRecord,
                             onMistakes = { vm.goRecords(1) },
@@ -151,6 +159,8 @@ fun CaliEduApp(
                             onDelete = vm::deleteRecord,
                             onRecategorize = vm::setCategory,
                             onReview = vm::startReview,
+                            onSample = vm::startSample,
+                            onDocSample = vm::startDocSample,
                             onStart = { vm.go(Screen.HOME) },
                             onClear = vm::clearRecords,
                         )
@@ -160,7 +170,6 @@ fun CaliEduApp(
                             onStyle = { vm.go(Screen.STYLE) },
                             onModel = { vm.go(Screen.MODEL) },
                             onLibrary = { vm.go(Screen.LIBRARY) },
-                            onClear = vm::clearRecords,
                             onScale = vm::setTextScale,
                             onScaleCommit = vm::commitTextScale,
                         )
@@ -199,6 +208,8 @@ fun CaliEduApp(
                             onNext = vm::next,
                             onPrev = vm::prev,
                             onSimilar = vm::practiseSimilar,
+                            onReview = vm::reviewSteps,
+                            onEndReview = vm::endReview,
                             onToggleReading = vm::toggleReading,
                             onRetry = { vm.loadStep(state.progress.idx) },
                             onJump = vm::loadStep,
@@ -361,7 +372,15 @@ private fun LoadingOverlay(label: String, seconds: Int, onCancel: () -> Unit) {
         Modifier
             .fillMaxSize()
             .background(skin.bg)
-            .clickable(enabled = false) {},
+            // clickable(enabled = false) 不会消费指针事件，浮层下面的按钮照样点得到。
+            // 这里把所有事件吞掉，浮层才真的是一层遮罩。
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { it.consume() }
+                    }
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -420,7 +439,9 @@ private fun ToastBanner(message: String, onDone: () -> Unit) {
         Text(
             message,
             fontSize = skin.fs(12.5f),
-            color = skin.onAccent,
+            // 底色用正文色、字色用页面底色：气泡永远和页面反着来。
+            // 原来固定用 onAccent（白），深色主题下就成了白字白底。
+            color = skin.bg,
             modifier = Modifier
                 .background(skin.text, RoundedCornerShape(100.dp))
                 .padding(horizontal = 16.dp, vertical = 9.dp),

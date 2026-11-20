@@ -11,6 +11,7 @@ import com.caliedu.sample.MathSample
 import com.caliedu.ui.MdNode
 import com.caliedu.ui.parseMarkdown
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -157,5 +158,100 @@ class MdLessonTest {
         val parsed = MdLesson.parse("只有一段正文，没有标题，但也应该能读。", "兜底")
         assertEquals(1, parsed.plan.steps.size)
         assertEquals("兜底", parsed.plan.title)
+    }
+
+    /** 代码块里以 `#` 开头的是注释。当成标题会把一节正文从中间劈开。 */
+    @Test
+    fun codeCommentsAreNotHeadings() {
+        val text = """
+            # 讲义
+
+            ## 1.1 读数据
+
+            正文一段。
+
+            ```python
+            # ====================
+            # 模块 ①：load_data
+            # ====================
+            def load():
+                pass
+            ```
+
+            正文另一段，足够长，不该被当成封面丢掉。
+
+            ## 1.2 归一化
+
+            归一化把每一列压到 0 到 1，避免大量纲特征主导梯度。
+        """.trimIndent()
+
+        val parsed = MdLesson.parse(text, "兜底")
+        assertEquals(listOf("1.1 读数据", "1.2 归一化"), parsed.plan.steps.map { it.title })
+        // 代码块应当完整留在一节里
+        assertTrue(parsed.contents[1]?.blocks?.first()?.md.orEmpty().contains("# 模块 ①"))
+    }
+
+    /** `# 第一部分` 不是一节，它是下面几节的分组头，要出现在被它覆盖的第一节开头。 */
+    @Test
+    fun partHeadingBelongsToTheSectionItIntroduces() {
+        val text = """
+            # 书名
+
+            ## 第一节
+
+            第一节的正文写在这里，长度足够，不会被当成封面丢掉，应该保留下来。
+
+            # 第一部分
+
+            这一部分讲两件事。
+
+            ## 第二节
+
+            第二节的正文也写在这里，同样足够长，应该单独成为一节内容。
+
+            ## 第三节
+
+            第三节的正文继续写在这里，长度也够，应该完整地保留下来。
+        """.trimIndent()
+
+        val parsed = MdLesson.parse(text, "兜底")
+        assertEquals(3, parsed.plan.steps.size)
+        val second = parsed.contents[2]?.blocks?.first()?.md.orEmpty()
+        assertTrue("「第一部分」应在第二节开头，实际：$second", second.startsWith("# 第一部分"))
+        assertFalse("第一节的正文串到第二节去了", second.contains("第一节的正文"))
+    }
+
+    /** 通篇只用一级标题时，别死守二级。 */
+    @Test
+    fun singleLevelOutlineStillSplits() {
+        val text = """
+            # 书名
+
+            # 第一章
+
+            第一章的正文写在这里，长度足够长，应该单独成一节。
+
+            # 第二章
+
+            第二章的正文也写在这里，同样足够长，应该单独成一节。
+        """.trimIndent()
+
+        val parsed = MdLesson.parse(text, "兜底")
+        assertEquals(2, parsed.plan.steps.size)
+        assertEquals("第一章", parsed.plan.steps[0].title)
+    }
+
+    /** 分类看内容，不看代码特征：讲回归的讲义不该被归到 Python。 */
+    @Test
+    fun categoryFollowsContentNotSyntax() {
+        val text = """
+            # 用 numpy 预测鲍鱼年龄
+
+            先读入数据集，按 8:2 划出训练集和测试集，再做归一化。
+            模型是一个小神经网络，用均方误差当损失函数，梯度下降更新权重。
+        """.trimIndent()
+
+        assertEquals("机器学习", Subject.guess(text))
+        assertEquals("机器学习", MdLesson.parse(text, "兜底").plan.tags.first())
     }
 }

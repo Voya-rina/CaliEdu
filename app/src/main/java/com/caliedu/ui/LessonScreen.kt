@@ -1,8 +1,14 @@
 package com.caliedu.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -44,16 +51,28 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.caliedu.UiState
@@ -63,6 +82,8 @@ import com.caliedu.core.Verdict
 import com.caliedu.data.ChannelMode
 import com.caliedu.model.Choice
 import com.caliedu.model.StepContent
+import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 enum class ExportKind { MARKDOWN, PDF, COPY, PLAY }
 
@@ -77,6 +98,8 @@ fun LessonScreen(
     onPrev: () -> Unit,
     onSimilar: () -> Unit,
     onToggleReading: () -> Unit,
+    onReview: () -> Unit,
+    onEndReview: () -> Unit,
     onGenerate: (Int) -> Unit,
     onFocusStep: (Int) -> Unit,
     onExport: (ExportKind) -> Unit,
@@ -95,6 +118,66 @@ fun LessonScreen(
     val track = Track.of(plan.kind)
     var dirOpen by remember { mutableStateOf(false) }
     var fontOpen by remember { mutableStateOf(false) }
+
+    // 答题框的选区要和底栏的符号条共用：符号要插在光标处，String 拿不到光标。
+    val question = state.content?.question
+    val typing = question?.kind == "short" || question?.kind == "checklist"
+    var field by remember(state.recordId, state.progress.idx) { mutableStateOf(TextFieldValue(state.draft)) }
+    var focused by remember(state.recordId, state.progress.idx) { mutableStateOf(false) }
+    LaunchedEffect(state.draft) {
+        if (field.text != state.draft) field = TextFieldValue(state.draft, TextRange(state.draft.length))
+    }
+
+    // 翻页：整块正文跟着手指横移，滑出去之后才换内容，再从另一侧滑回来。
+    // 不用 AnimatedContent 是因为它会把「退场的那一步」按新 state 重组一遍，
+    // 结果滑走的其实是下一步的内容。这里先离场、再换、再入场，顺序不会错。
+    val dx = remember { Animatable(0f) }
+    var turning by remember { mutableStateOf(false) }
+    var bodyWidth by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+
+    fun slideTo(target: Float, spec: AnimationSpec<Float>) {
+        // 拖动中途要能打断上一段动画，animateTo 天然会取消前一段。
+        scope.launch { runCatching { dx.animateTo(target, spec) } }
+    }
+
+    fun turnTo(dir: Int, allowed: Boolean, width: Float, action: () -> Unit) {
+        if (turning) return
+        val w = if (width > 0f) width else 1080f
+        if (!allowed) {
+            // 到头了：顶一下再弹回来。什么都不发生的话，用户会以为手势没生效。
+            scope.launch {
+                runCatching {
+                    dx.animateTo(dir * 26f, tween(90))
+                    dx.animateTo(0f, tween(150))
+                }
+            }
+            return
+        }
+        turning = true
+        scope.launch {
+            runCatching {
+                dx.animateTo(-dir * w, tween(170, easing = FastOutLinearInEasing))
+                action()
+                // 走出去之后从另一侧回来。这里必须 snap：动画此刻在 -w，
+                // 换成 +0.44w 会让同一个值同时被两段动画追，看起来是从半路弹回来的。
+                dx.snapTo(dir * w * 0.44f)
+                dx.animateTo(0f, tween(210, easing = LinearOutSlowInEasing))
+            }
+            turning = false
+        }
+    }
+
+    val canPrev = state.progress.idx > 0
+    val canNext = state.canAdvance
+
+    // 切去通读时把翻页的位移收掉，免得回来时正文停在屏幕外。
+    LaunchedEffect(state.reading) {
+        if (state.reading) {
+            turning = false
+            runCatching { dx.snapTo(0f) }
+        }
+    }
 
     Column(
         Modifier
@@ -164,6 +247,27 @@ fun LessonScreen(
             ExportMenu(allowPlay = state.settings.runCode && track == Track.CODE, onExport = onExport)
         }
 
+        if (state.reviewing) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .background(skin.accentSoft)
+                    .padding(start = 20.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("回看中 · 题目不再要求作答", fontSize = skin.fs(11.5f), color = skin.accentDeep)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "结束回看",
+                    fontSize = skin.fs(11.5f),
+                    color = skin.accentDeep,
+                    modifier = Modifier
+                        .clickable(onClick = onEndReview)
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+
         if (state.reading) {
             Box(Modifier.weight(1f)) {
                 ReadingView(state = state, onGenerate = onGenerate, onFocusStep = onFocusStep)
@@ -176,22 +280,68 @@ fun LessonScreen(
                 skin = skin,
                 onClick = { dirOpen = true },
             )
-            StepBody(
-                state = state,
-                track = track,
-                onSubmit = onSubmit,
-                onDraft = onDraft,
-                onFinish = onBack,
-                onSimilar = onSimilar,
-                onRetry = onRetry,
-                modifier = Modifier.weight(1f),
-            )
+            Box(
+                Modifier
+                    .weight(1f)
+                    .clipToBounds()
+                    .onSizeChanged { bodyWidth = it.width }
+                    .pointerInput(state.progress.idx, state.finished, state.reading, canNext) {
+                        var total = 0f
+                        // 走完那一屏没有「下一步」，横滑只会平白抖一下。
+                        if (state.finished) return@pointerInput
+                        detectHorizontalDragGestures(
+                            onDragStart = { total = 0f },
+                            onHorizontalDrag = { change, amount ->
+                                // 跟手，但留一点阻尼：手指走 100，页面走 100 会很滑。
+                                change.consume()
+                                total += amount
+                                val limit = size.width.toFloat() * 0.94f
+                                val next = (dx.value + amount * 0.92f).coerceIn(-limit, limit)
+                                scope.launch { runCatching { dx.snapTo(next) } }
+                            },
+                            onDragEnd = {
+                                val w = size.width.toFloat()
+                                when {
+                                    total < -w * 0.2f -> turnTo(1, canNext, w, onNext)
+                                    total > w * 0.2f -> turnTo(-1, canPrev, w, onPrev)
+                                    else -> slideTo(0f, tween(180))
+                                }
+                            },
+                            onDragCancel = { slideTo(0f, tween(180)) },
+                        )
+                    }
+            ) {
+                StepBody(
+                    state = state,
+                    track = track,
+                    field = field,
+                    onField = { value ->
+                        field = value
+                        onDraft(value.text)
+                    },
+                    onFocus = { focused = it },
+                    onSubmit = onSubmit,
+                    onFinish = onBack,
+                    onSimilar = onSimilar,
+                    onReview = onReview,
+                    onRetry = onRetry,
+                    dx = dx.value,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
             if (!state.finished) {
                 StepBottomBar(
                     state = state,
+                    showSymbols = track == Track.MATH && typing && !state.canAdvance && !state.grading,
+                    onInsertSymbol = { item ->
+                        val next = field.insertSymbol(item, focused)
+                        field = next
+                        onDraft(next.text)
+                    },
                     onHint = onHint,
-                    onNext = onNext,
-                    onPrev = onPrev,
+                    // 点按钮和横滑走同一条动画：否则同一个动作两种观感。
+                    onNext = { turnTo(1, canNext, bodyWidth.toFloat(), onNext) },
+                    onPrev = { turnTo(-1, canPrev, bodyWidth.toFloat(), onPrev) },
                     onAsk = onAskOpen,
                 )
             }
@@ -208,6 +358,8 @@ fun LessonScreen(
             onInput = onAskInput,
             onSend = onAskSend,
             onDismiss = onAskClose,
+            // 数学课里问「这一步为什么能约掉」时，符号同样是打不出来的。
+            showSymbols = track == Track.MATH,
         )
     }
 
@@ -314,26 +466,39 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
 private fun StepBody(
     state: UiState,
     track: Track,
+    field: TextFieldValue,
+    onField: (TextFieldValue) -> Unit,
+    onFocus: (Boolean) -> Unit,
     onSubmit: (String) -> Unit,
-    onDraft: (String) -> Unit,
     onFinish: () -> Unit,
     onSimilar: () -> Unit,
+    onReview: () -> Unit,
     onRetry: () -> Unit,
+    dx: Float,
     modifier: Modifier = Modifier,
 ) {
     val skin = LocalSkin.current
     val brief = state.brief
     val content = state.content
-    val answered = state.progress.canAdvance
+    // 用 canAdvance 而不是 progress.canAdvance：回看时（以及从记录里翻回已过的步）
+    // 这道题的 progress 是新的，但这一课里它早就过了，不该再让人答一遍。
+    val answered = state.canAdvance
 
-    Column(
-        modifier
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-    ) {
+    val scroll = rememberScrollState()
+    // 换一步就回到顶部。否则读到长讲义底部再点「下一步」，新一步一进来就停在底部。
+    LaunchedEffect(state.progress.idx, state.finished) { scroll.scrollTo(0) }
+
+    Box(modifier) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .offset { IntOffset(dx.roundToInt(), 0) }
+                .verticalScroll(scroll)
+                .padding(horizontal = 20.dp)
+        ) {
         Spacer(Modifier.height(20.dp))
         if (state.finished) {
-            FinishedView(state, skin, onBack = onFinish, onSimilar = onSimilar)
+            FinishedView(state, skin, onBack = onFinish, onSimilar = onSimilar, onReview = onReview)
             Spacer(Modifier.height(40.dp))
             return@Column
         }
@@ -358,16 +523,17 @@ private fun StepBody(
                     content = content,
                     track = track,
                     answered = answered,
-                    chosen = state.draft,
+                    field = field,
                     grading = state.grading,
                     onPick = onSubmit,
-                    onDraft = onDraft,
+                    onField = onField,
+                    onFocus = onFocus,
                     onSubmit = { onSubmit(state.draft) },
                     skin = skin,
                 )
                 state.feedback?.let { feedback ->
                     Spacer(Modifier.height(12.dp))
-                    FeedbackBlock(feedback.verdict == Verdict.CORRECT, feedback.text, skin)
+                    FeedbackBlock(feedback.verdict, feedback.text, skin)
                 }
                 if (answered && content.summary.isNotEmpty()) {
                     Spacer(Modifier.height(18.dp))
@@ -414,12 +580,15 @@ private fun StepBody(
             }
         }
         Spacer(Modifier.height(40.dp))
+        }
     }
 }
 
 @Composable
 private fun StepBottomBar(
     state: UiState,
+    showSymbols: Boolean,
+    onInsertSymbol: (SymItem) -> Unit,
     onHint: () -> Unit,
     onNext: () -> Unit,
     onPrev: () -> Unit,
@@ -434,6 +603,10 @@ private fun StepBottomBar(
     val canPrev = state.progress.idx > 0
     val canAsk = state.content != null && state.settings.mode == ChannelMode.DIRECT && state.settings.configured
     val isLast = state.progress.idx == (state.plan?.steps?.lastIndex ?: 0)
+    // 底栏所有按键同一尺寸、同一形状。之前上一步 42dp 圆、下一步 50dp 方，
+    // 两个键看着像来自两套设计。
+    val keyShape = if (skin.pillChoices) CircleShape else RoundedCornerShape(skin.radiusCard)
+
     Column(Modifier.background(skin.bg)) {
         if (skin.style != UiStyle.MATERIAL) {
             Box(
@@ -443,81 +616,90 @@ private fun StepBottomBar(
                     .background(skin.line)
             )
         }
+        // 符号条贴着底栏：输入框就在上面，手不用在屏幕上下两头来回跑。
+        if (showSymbols) {
+            SymbolStrip(
+                onInsert = onInsertSymbol,
+                enabled = !state.grading,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 9.dp),
+            )
+        }
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 往回翻：长课里想重看上一节，不该只能开目录。
-            Box(
-                Modifier
-                    .size(42.dp)
-                    .background(if (canPrev) skin.codeBg else skin.bg, CircleShape)
-                    .clickable(enabled = canPrev, onClick = onPrev),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Rounded.ChevronLeft,
-                    contentDescription = "上一步",
-                    tint = if (canPrev) skin.sub else skin.line,
-                    modifier = Modifier.size(skin.ui(20f)),
-                )
-            }
+            BarKey(
+                icon = Icons.Rounded.ChevronLeft,
+                label = "上一步",
+                enabled = canPrev,
+                primary = false,
+                shape = keyShape,
+                onClick = onPrev,
+            )
             if (!solvedNow) {
                 Spacer(Modifier.width(8.dp))
-                val left = state.progress.hintsShown < 3
-                Box(
-                    Modifier
-                        .size(42.dp)
-                        .background(if (left) skin.codeBg else skin.bg, CircleShape)
-                        .clickable(enabled = left, onClick = onHint),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.Rounded.Lightbulb,
-                        contentDescription = "提示",
-                        tint = if (left) skin.accent else skin.line,
-                        modifier = Modifier.size(skin.ui(20f)),
-                    )
-                }
+                BarKey(
+                    icon = Icons.Rounded.Lightbulb,
+                    label = "提示",
+                    enabled = state.progress.hintsShown < 3,
+                    primary = false,
+                    shape = keyShape,
+                    onClick = onHint,
+                )
             }
             if (canAsk) {
                 Spacer(Modifier.width(8.dp))
-                Box(
-                    Modifier
-                        .size(42.dp)
-                        .background(skin.codeBg, CircleShape)
-                        .clickable(onClick = onAsk),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Rounded.Chat,
-                        contentDescription = "追问",
-                        tint = skin.accent,
-                        modifier = Modifier.size(skin.ui(19f)),
-                    )
-                }
-            }
-            Spacer(Modifier.weight(1f))
-            Box(
-                Modifier
-                    .size(50.dp)
-                    .background(
-                        if (canNext) skin.accent else skin.codeBg,
-                        if (skin.pillChoices) CircleShape else RoundedCornerShape(skin.radiusCard),
-                    )
-                    .clickable(enabled = canNext, onClick = onNext),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    if (isLast) Icons.Rounded.Check else Icons.AutoMirrored.Rounded.ArrowForward,
-                    contentDescription = if (isLast) "完成" else "下一步",
-                    tint = if (canNext) skin.onAccent else skin.sub,
-                    modifier = Modifier.size(skin.ui(22f)),
+                BarKey(
+                    icon = Icons.AutoMirrored.Rounded.Chat,
+                    label = "追问",
+                    enabled = true,
+                    primary = false,
+                    shape = keyShape,
+                    onClick = onAsk,
                 )
             }
+            Spacer(Modifier.weight(1f))
+            BarKey(
+                icon = if (isLast) Icons.Rounded.Check else Icons.AutoMirrored.Rounded.ArrowForward,
+                label = if (isLast) "完成" else "下一步",
+                enabled = canNext,
+                primary = true,
+                shape = keyShape,
+                onClick = onNext,
+            )
         }
+    }
+}
+
+/** 底栏按键。[primary] 只改填充色，几何尺寸和形状一律跟随底栏，两个方向键才像一对。 */
+@Composable
+private fun BarKey(
+    icon: ImageVector,
+    label: String,
+    enabled: Boolean,
+    primary: Boolean,
+    shape: Shape,
+    onClick: () -> Unit,
+) {
+    val skin = LocalSkin.current
+    val background = if (primary && enabled) skin.accent else skin.codeBg
+    val tint = when {
+        primary && enabled -> skin.onAccent
+        !enabled -> skin.line
+        primary -> skin.accent
+        else -> skin.sub
+    }
+    Box(
+        Modifier
+            .size(skin.ui(46f))
+            .background(background, shape)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(skin.ui(20f)))
     }
 }
 
@@ -576,14 +758,16 @@ private fun QuestionCard(
     content: StepContent,
     track: Track,
     answered: Boolean,
-    chosen: String,
+    field: TextFieldValue,
     grading: Boolean,
     onPick: (String) -> Unit,
-    onDraft: (String) -> Unit,
+    onField: (TextFieldValue) -> Unit,
+    onFocus: (Boolean) -> Unit,
     onSubmit: () -> Unit,
     skin: Skin,
 ) {
     val question = content.question
+    val chosen = field.text
     val cardShape = RoundedCornerShape(skin.radiusCard)
     Column(
         Modifier
@@ -623,6 +807,7 @@ private fun QuestionCard(
 
         if (question.kind == "short" || question.kind == "checklist") {
             val multi = question.kind == "checklist"
+
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -642,15 +827,19 @@ private fun QuestionCard(
                     )
                 }
                 BasicTextField(
-                    value = chosen,
-                    onValueChange = onDraft,
+                    value = field,
+                    onValueChange = onField,
                     enabled = !answered && !grading,
                     textStyle = TextStyle(fontSize = skin.bodySize, lineHeight = skin.bodyLine, color = skin.text),
                     cursorBrush = SolidColor(skin.accent),
                     maxLines = if (multi) 6 else 3,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { onFocus(it.isFocused) },
                 )
             }
+
+            // 符号条在底栏：挨着输入框会被键盘顶来顶去，也会把「提交」挤到看不见。
             Spacer(Modifier.height(10.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -750,24 +939,40 @@ private fun ChoiceRow(
 }
 
 @Composable
-private fun FeedbackBlock(correct: Boolean, text: String, skin: Skin) {
+private fun FeedbackBlock(verdict: Verdict, text: String, skin: Skin) {
+    // 三档而不是两档：连错三次公布答案既不是「答对」也不该按「答错」的红字骂人。
+    val tone = when (verdict) {
+        Verdict.CORRECT -> if (skin.style == UiStyle.PRINT) skin.amber else skin.accent
+        Verdict.PARTIAL -> skin.amber
+        Verdict.WRONG -> skin.wrong
+    }
+    val soft = when (verdict) {
+        Verdict.CORRECT -> if (skin.style == UiStyle.PRINT) skin.amberSoft else skin.okSoft
+        Verdict.PARTIAL -> skin.amberSoft
+        Verdict.WRONG -> skin.wrongSoft
+    }
+    val ink = when (verdict) {
+        Verdict.CORRECT -> if (skin.style == UiStyle.PRINT) skin.text else skin.accentDeep
+        Verdict.PARTIAL -> skin.text
+        Verdict.WRONG -> skin.wrong
+    }
     if (skin.style == UiStyle.PRINT) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .background(if (correct) skin.amberSoft else skin.wrongSoft)
+                .background(soft)
         ) {
             Box(
                 Modifier
                     .width(5.dp)
                     .height((skin.bodySize.value * 4f).dp)
-                    .background(if (correct) skin.amber else skin.wrong)
+                    .background(tone)
             )
             Text(
                 text = text,
                 fontSize = skin.bodySize * 0.97f,
                 lineHeight = skin.bodyLine,
-                color = if (correct) skin.text else skin.wrong,
+                color = ink,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             )
         }
@@ -776,10 +981,10 @@ private fun FeedbackBlock(correct: Boolean, text: String, skin: Skin) {
             text = text,
             fontSize = skin.bodySize * 0.97f,
             lineHeight = skin.bodyLine,
-            color = if (correct) skin.accentDeep else skin.wrong,
+            color = ink,
             modifier = Modifier
                 .fillMaxWidth()
-                .background(if (correct) skin.okSoft else skin.wrongSoft, RoundedCornerShape(skin.radiusChoice))
+                .background(soft, RoundedCornerShape(skin.radiusChoice))
                 .padding(horizontal = 14.dp, vertical = 12.dp),
         )
     }
@@ -791,6 +996,7 @@ private fun FinishedView(
     skin: Skin,
     onBack: () -> Unit,
     onSimilar: () -> Unit,
+    onReview: () -> Unit,
 ) {
     val plan = state.plan
     Column {
@@ -839,6 +1045,23 @@ private fun FinishedView(
             }
         }
         Spacer(Modifier.height(26.dp))
+        // 走完了不等于看不了了。讲义都在记录里，给一个回看的入口——
+        // 之前这一屏只有「再来一道」和「换一道」，想翻回去看看第 3 步怎么推的，没有路。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(skin.codeBg, RoundedCornerShape(if (skin.pillChoices) 100.dp else skin.radiusCard))
+                .clickable(onClick = onReview)
+                .padding(vertical = 12.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "回看这 ${plan?.steps?.size ?: 0} ${if (state.isDoc) "节" else "步"}",
+                fontSize = skin.bodySize * 0.95f,
+                color = skin.text,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
         // 走完不是终点：要么换一道新的，要么照着这道再来一道同类型的。
         val canSimilar = !state.isDoc &&
             state.settings.mode == ChannelMode.DIRECT &&

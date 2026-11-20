@@ -51,10 +51,18 @@ class TexLiteTest {
     }
 
     @Test
-    fun unknownCommandKeepsWord() {
+    fun unknownCommandIsDropped() {
+        // 命令名不该被当正文：\mathbb{R} 只留 R，不留 "mathbbR"
         val out = TexLite.convert("\\mathbb{R}")
         assertFalse(out.contains("\\"))
-        assertTrue(out.contains("mathbb"))
+        assertFalse(out.contains("mathbb"))
+        assertTrue(out.contains("R"))
+    }
+
+    @Test
+    fun accentKeepsTheLetter() {
+        // \hat{y} 的帽子画不出来，但 y 必须还在
+        assertEquals("y", TexLite.convert("\\hat{y}"))
     }
 }
 

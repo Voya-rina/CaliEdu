@@ -18,11 +18,14 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // auto 会按系统深浅色挑状态栏图标；固定 light 的话深色下会先出现一组黑图标。
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT),
         )
-        incoming = extract(intent)
+        // 旋转屏幕时 intent 还是那条 ACTION_SEND。不加这个判断的话，
+        // 用户改过的输入会被原始分享文本重新盖掉一遍。
+        if (savedInstanceState == null) incoming = extract(intent)
         setContent {
             CaliEduApp(
                 sharedText = incoming,
@@ -49,6 +52,11 @@ class MainActivity : ComponentActivity() {
             Intent.ACTION_VIEW -> intent.dataString
             else -> null
         }
-        return text?.takeIf { it.isNotBlank() }?.take(200_000)
+        return text?.takeIf { it.isNotBlank() }?.take(MAX_SHARED)
+    }
+
+    private companion object {
+        /** 分享进来的文本最多收这么多；再长的题面注定要被截，先在这里止损。 */
+        const val MAX_SHARED = 20_000
     }
 }

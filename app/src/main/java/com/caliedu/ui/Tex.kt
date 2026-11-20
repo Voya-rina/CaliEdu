@@ -1,8 +1,10 @@
 package com.caliedu.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -11,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -38,6 +42,12 @@ sealed interface TexNode {
     data class Scripts(val base: List<TexNode>, val sup: List<TexNode>?, val sub: List<TexNode>?) : TexNode
     data class Sqrt(val body: List<TexNode>, val index: List<TexNode>?) : TexNode
     data class BigOp(val sym: String, val sup: List<TexNode>?, val sub: List<TexNode>?) : TexNode
+
+    /** 只是把一段内容包起来，本身不画东西。重音、字体、\boxed 这类共用。 */
+    data class Group(val items: List<TexNode>) : TexNode
+
+    /** `\\`：换行。由 MathLine 切成多行排，不是空格。 */
+    data object Break : TexNode
 }
 
 object Tex {
@@ -68,6 +78,50 @@ object Tex {
     )
 
     private val functions = setOf("sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "lg", "exp", "arg", "det", "gcd")
+
+    /** 纯间距命令：画一个空格，不留命令名。 */
+    private val spacing = setOf(
+        "quad", "qquad", "enspace", "enskip", "thinspace", "medspace", "thickspace",
+        "hfill", "hfil", "hss", "space", "negthinspace",
+    )
+
+    /** 只影响排版位置、不产出内容。 */
+    private val invisible = setOf(
+        "displaystyle", "textstyle", "scriptstyle", "scriptscriptstyle",
+        "limits", "nolimits", "mathstrut", "strut", "relax", "nonumber", "notag",
+        "big", "Big", "bigg", "Bigg", "bigl", "bigr", "Bigl", "Bigr", "middle",
+        "allowbreak", "nobreak",
+    )
+
+    /** 吃掉一个参数的命令：参数描述的是版式（标签、间距、颜色），不是公式内容。 */
+    private val swallowArg = setOf(
+        "label", "tag", "hspace", "vspace", "hskip", "vskip", "kern", "mkern",
+        "color", "pagecolor", "phantom", "hphantom", "vphantom",
+    )
+
+    /** 重音与装饰：手机排版画不准帽子横线，保留被装饰的内容、丢掉装饰。 */
+    private val accents = setOf(
+        "hat", "widehat", "bar", "overline", "underline", "vec", "overrightarrow",
+        "tilde", "widetilde", "dot", "ddot", "acute", "grave", "breve", "check", "mathring",
+    )
+
+    /** 字体切换：内容照排，字形不换。 */
+    private val typefaces = setOf(
+        "mathcal", "mathfrak", "mathscr", "mathit", "mathsf", "mathtt",
+        "boldsymbol", "bm", "mathnormal",
+    )
+
+    /** 语义包裹：把内容原样排出来就行。 */
+    private val passthrough = setOf(
+        "boxed", "underbrace", "overbrace", "hbox", "mbox",
+        "mathord", "mathbin", "mathrel", "mathop", "mathopen", "mathclose", "mathpunct", "smash",
+    )
+
+    /** `\mathbb{R}` 这类黑体字母，单字母能直接换成 Unicode。 */
+    private val blackboard = mapOf(
+        "R" to "ℝ", "N" to "ℕ", "Z" to "ℤ", "Q" to "ℚ", "C" to "ℂ",
+        "P" to "ℙ", "H" to "ℍ", "E" to "𝔼",
+    )
 
     fun parse(src: String): List<TexNode> = Reader(src).parseSeq(top = true)
 
@@ -166,7 +220,7 @@ object Tex {
                 val ch = if (i < s.length) s[i].also { i++ } else ' '
                 return when (ch) {
                     ',' , ';', ':', '!', ' ' -> TexNode.Run(" ")
-                    '\\' -> TexNode.Run(" ")
+                    '\\' -> TexNode.Break
                     '{' -> TexNode.Run("{")
                     '}' -> TexNode.Run("}")
                     else -> TexNode.Run(ch.toString())
@@ -185,11 +239,16 @@ object Tex {
                     TexNode.Run(rawGroup(), upright = true)
 
                 name == "left" || name == "right" -> {
-                    // \left( → "(" ；\left. → 什么都不画
-                    if (i < s.length && s[i] != '.') TexNode.Run(s[i].toString().also { i++ })
-                    else {
-                        if (i < s.length) i++
-                        TexNode.Run("")
+                    // \left( → "(" ；\left. → 什么都不画；\left\{ → 交给转义分支
+                    when {
+                        i >= s.length -> TexNode.Run("")
+                        s[i] == '.' -> {
+                            i++
+                            TexNode.Run("")
+                        }
+
+                        s[i] == '\\' -> readCommand()
+                        else -> TexNode.Run(s[i].toString().also { i++ })
                     }
                 }
 
@@ -198,13 +257,40 @@ object Tex {
                     TexNode.Run("")
                 }
 
+                name == "mathbb" -> {
+                    val body = readGroup()
+                    val only = (body.singleOrNull() as? TexNode.Run)?.text
+                    if (only != null && blackboard.containsKey(only)) {
+                        TexNode.Run(blackboard.getValue(only), upright = true)
+                    } else {
+                        TexNode.Group(body)
+                    }
+                }
+
                 bigOps.containsKey(name) -> TexNode.BigOp(bigOps.getValue(name), null, null)
 
                 functions.contains(name) -> TexNode.Run(name, upright = true)
 
                 symbols.containsKey(name) -> TexNode.Run(symbols.getValue(name))
 
-                else -> TexNode.Run(name)
+                typefaces.contains(name) -> TexNode.Group(readGroup())
+
+                accents.contains(name) -> TexNode.Group(readGroup())
+
+                passthrough.contains(name) -> TexNode.Group(readGroup())
+
+                spacing.contains(name) -> TexNode.Run(if (name == "negthinspace") "" else " ")
+
+                invisible.contains(name) -> TexNode.Run("")
+
+                swallowArg.contains(name) -> {
+                    readGroup()
+                    TexNode.Run("")
+                }
+
+                // 认不出的命令一律丢掉。宁可少画一个记号，也不能把 "quad"、"hat" 这种
+                // 命令名当正文印出来——那比留白更像坏了。
+                else -> TexNode.Run("")
             }
         }
 
@@ -267,12 +353,45 @@ object Tex {
         font: FontFamily = FontFamily.Serif,
     ) {
         val nodes = remember(tex) { runCatching { parse(tex) }.getOrElse { listOf(TexNode.Run(tex)) } }
-        Row(
-            modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Seq(nodes, size, color, font)
+        // `\\` 把一条公式切成多行：cases / 矩阵 / 多步推导都靠它，不能被压成一个空格。
+        val rows = remember(nodes) {
+            val out = mutableListOf<List<TexNode>>()
+            val cur = mutableListOf<TexNode>()
+            nodes.forEach { node ->
+                if (node is TexNode.Break) {
+                    if (cur.isNotEmpty()) {
+                        out.add(cur.toList())
+                        cur.clear()
+                    }
+                } else {
+                    cur.add(node)
+                }
+            }
+            if (cur.isNotEmpty()) out.add(cur.toList())
+            if (out.isEmpty()) out.add(emptyList())
+            out
+        }
+        // 长式子（连等、长分式）在手机上放不下，给它一条横向的出路，别裁掉。
+        BoxWithConstraints(modifier.fillMaxWidth()) {
+            val viewport = maxWidth
+            Row(
+                Modifier
+                    .horizontalScroll(rememberScrollState())
+                    .widthIn(min = viewport),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (rows.size == 1) {
+                    Seq(rows[0], size, color, font)
+                } else {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy((size.value * 0.2f).dp),
+                    ) {
+                        rows.forEach { Seq(it, size, color, font) }
+                    }
+                }
+            }
         }
     }
 
@@ -298,6 +417,16 @@ object Tex {
             }
 
             is TexNode.Frac -> FracBox(node, size, color, font)
+
+            is TexNode.Group -> Seq(node.items, size, color, font)
+
+            // Break 正常会被 MathLine 切走；漏到这里的（比如嵌在上下标里）当空格处理。
+            TexNode.Break -> Text(
+                text = " ",
+                fontFamily = font,
+                fontSize = size,
+                color = color,
+            )
 
             is TexNode.Sqrt -> SqrtBox(node, size, color, font)
 

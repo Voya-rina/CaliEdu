@@ -29,6 +29,9 @@ object TexLite {
         "\\lim" to "lim", "\\arg" to "arg", "\\det" to "det",
         "\\left" to "", "\\right" to "", "\\quad" to "  ", "\\qquad" to "   ",
         "\\," to "", "\\;" to "", "\\!" to "", "\\ " to " ",
+        "\\sqrt" to "√", "\\cdots" to "⋯", "\\ldots" to "…", "\\dots" to "…",
+        "\\forall" to "∀", "\\exists" to "∃",
+        "\\hat" to "", "\\bar" to "", "\\vec" to "", "\\overline" to "",
     )
 
     private val SUP = mapOf(
@@ -63,7 +66,8 @@ object TexLite {
                     } else {
                         val word = Regex("""\\[a-zA-Z]+""").find(s, i)
                         if (word != null && word.range.first == i) {
-                            out.append(word.value.drop(1))
+                            // 认不出的命令直接丢掉。留着命令名会把 \hat{y} 念成 "haty"，
+                            // 比少一个符号更糟——学生看到的是乱码，不是公式。
                             i = word.range.last + 1
                         } else {
                             i++

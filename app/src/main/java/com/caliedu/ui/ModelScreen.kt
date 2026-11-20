@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -64,7 +65,10 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
     val skin = LocalSkin.current
     var base by remember { mutableStateOf(settings.baseUrl) }
     var model by remember { mutableStateOf(settings.model) }
-    var key by remember { mutableStateOf("") }
+    // 直接把已存的 Key 填进来（密码框显示成点）。
+    // 原来留空表示「不改」，于是「清除 Key」之后按返回又会把旧的写回去——
+    // 用户以为清掉了，其实没有。
+    var key by remember { mutableStateOf(settings.apiKey) }
     var mode by remember { mutableStateOf(settings.mode) }
     var grade by remember { mutableStateOf(settings.autoGrade) }
     var runCode by remember { mutableStateOf(settings.runCode) }
@@ -72,14 +76,14 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
     fun snapshot() = LlmSettings(
         baseUrl = base.trim(),
         model = model.trim(),
-        apiKey = key.trim().ifBlank { settings.apiKey },
+        apiKey = key.trim(),
         mode = mode,
         autoGrade = grade,
         runCode = runCode,
     )
 
     LaunchedEffect(base, model, key, mode, grade, runCode) {
-        val untouched = key.isBlank() &&
+        val untouched = key.trim() == settings.apiKey &&
             base == settings.baseUrl &&
             model == settings.model &&
             mode == settings.mode &&
@@ -94,6 +98,8 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
         Modifier
             .fillMaxSize()
             .background(skin.bg)
+            // 这个页面有三个输入框，没有它键盘会直接把「地址/模型/Key」压住。
+            .imePadding()
             .padding(horizontal = 22.dp)
     ) {
         Spacer(Modifier.height(8.dp))
@@ -164,17 +170,17 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                     label = "Key",
                     value = key,
                     password = true,
-                    placeholder = if (settings.apiKey.isNotBlank()) "已保存，留空就不改" else "sk-…",
+                    placeholder = "sk-…",
                 ) { key = it }
 
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "Key 只存在这台手机上，不经过任何服务器。",
+                    "Key 加密后存在这台手机上，不进云备份。",
                     fontSize = skin.fs(11.5f),
                     lineHeight = skin.fs(18f),
                     color = skin.sub,
                 )
-                if (settings.apiKey.isNotBlank()) {
+                if (key.isNotBlank()) {
                     Spacer(Modifier.height(8.dp))
                     Text(
                         "清除已存的 Key",
@@ -183,7 +189,7 @@ fun ModelScreen(settings: LlmSettings, onSave: (LlmSettings) -> Unit, onBack: ()
                         modifier = Modifier
                             .clickable {
                                 key = ""
-                                onSave(snapshot().copy(apiKey = ""))
+                                onSave(snapshot())
                             }
                             .padding(vertical = 2.dp),
                     )

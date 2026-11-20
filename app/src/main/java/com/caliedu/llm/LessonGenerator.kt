@@ -45,8 +45,9 @@ class LessonGenerator(
         explicitNulls = false
     }
 
-    suspend fun analyze(settings: LlmSettings, input: String): LessonPlan {
-        val hint = TrackDetector.detect(input)
+    suspend fun analyze(settings: LlmSettings, input: String, forced: Track? = null): LessonPlan {
+        // 用户手动选了类型就听他的：本地猜的和模型说的都不算。
+        val hint = forced ?: TrackDetector.detect(input)
         val isCode = hint == Track.CODE
         val payload = if (isCode && CodeDigest.shouldDigest(input)) CodeDigest.digest(input) else input
         val raw = channelOf(settings).complete(
@@ -68,7 +69,7 @@ class LessonGenerator(
             .filter { it.title.isNotBlank() }
             .take(MAX_STEPS)
             .mapIndexed { index, step -> step.copy(n = index + 1) }
-        val track = settle(hint, safe.kind)
+        val track = forced ?: settle(hint, safe.kind)
         // 分类必须以固定大类开头，模型写花了就地折回来。
         return safe.copy(
             kind = track.key,

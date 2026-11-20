@@ -20,7 +20,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Info
@@ -31,10 +30,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,12 +50,10 @@ fun SettingsHome(
     onStyle: () -> Unit,
     onModel: () -> Unit,
     onLibrary: () -> Unit,
-    onClear: () -> Unit,
     onScale: (Float) -> Unit,
     onScaleCommit: () -> Unit,
 ) {
     val skin = LocalSkin.current
-    var confirmClear by remember { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -116,15 +110,6 @@ fun SettingsHome(
             )
 
             Spacer(Modifier.height(20.dp))
-            Group("数据")
-            SettingRow(
-                icon = Icons.Rounded.DeleteSweep,
-                title = "清空记录",
-                trailing = "${state.records.size} 条",
-                onClick = if (state.records.isEmpty()) null else ({ confirmClear = true }),
-            )
-
-            Spacer(Modifier.height(20.dp))
             Group("关于")
             SettingRow(
                 icon = Icons.Rounded.Info,
@@ -134,19 +119,6 @@ fun SettingsHome(
             )
             Spacer(Modifier.height(24.dp))
         }
-    }
-
-    if (confirmClear) {
-        ConfirmDialog(
-            title = "清空所有记录",
-            message = "课程、错题本、答题统计会一起删掉，删完找不回来。",
-            confirmText = "全部清空",
-            onConfirm = {
-                confirmClear = false
-                onClear()
-            },
-            onDismiss = { confirmClear = false },
-        )
     }
 }
 

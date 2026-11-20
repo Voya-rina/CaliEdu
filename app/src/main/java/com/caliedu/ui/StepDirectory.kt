@@ -96,7 +96,7 @@ fun StepDirectorySheet(
                 Modifier.heightIn(max = 520.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                itemsIndexed(plan.steps) { index, brief ->
+                itemsIndexed(plan.steps, key = { _, brief -> brief.n }) { index, brief ->
                     val current = index == state.progress.idx
                     val ready = state.contents.containsKey(brief.n)
                     val passed = index in state.passed

@@ -433,6 +433,10 @@ object Md2Html {
         "\\min" to "min", "\\max" to "max", "\\log" to "log", "\\ln" to "ln",
         "\\sin" to "sin", "\\cos" to "cos", "\\hat" to "", "\\bar" to "",
         "\\left" to "", "\\right" to "", "\\," to " ", "\\;" to " ", "\\ " to " ",
+        // 版式命令：留下内容，丢掉命令本身。否则导出的 PDF 里会出现 *quad*、*mathbb*。
+        "\\quad" to "  ", "\\qquad" to "    ", "\\text" to "", "\\mathrm" to "",
+        "\\mathbb" to "", "\\mathcal" to "", "\\vec" to "", "\\overline" to "",
+        "\\cdots" to " ⋯ ", "\\ldots" to " … ", "\\to" to " → ", "\\Rightarrow" to " ⇒ ",
     )
 
     private val KEYWORDS = setOf(

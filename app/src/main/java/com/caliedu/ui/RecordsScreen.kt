@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,6 +30,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoStories
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -61,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.caliedu.core.Category
 import com.caliedu.core.Subject
+import com.caliedu.core.Track
 import com.caliedu.data.LessonRecord
 import com.caliedu.data.Mistake
 import com.caliedu.data.Stats
@@ -80,6 +83,8 @@ fun RecordsScreen(
     onDelete: (String) -> Unit,
     onRecategorize: (String, String) -> Unit,
     onReview: () -> Unit,
+    onSample: (Track) -> Unit,
+    onDocSample: () -> Unit,
     onStart: () -> Unit,
     onClear: () -> Unit,
 ) {
@@ -89,10 +94,14 @@ fun RecordsScreen(
     var pendingDelete by remember { mutableStateOf<LessonRecord?>(null) }
     var pendingCategory by remember { mutableStateOf<LessonRecord?>(null) }
     var searching by remember { mutableStateOf(false) }
+    var sampleOpen by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     val searchFocus = remember { FocusRequester() }
 
-    val stats = remember(records) { Stats.of(records) }
+    // 统计里带着「该复习几条」和连续天数，两个都跟当前时间有关。
+    // 只按 records 缓存的话，跨天之后这两个数会一直停在旧值。
+    val dayBucket = System.currentTimeMillis() / 86_400_000L
+    val stats = remember(records, dayBucket) { Stats.of(records) }
 
     // 一级分类：旧记录没有 tags 也会按题型折进一个大类，筛选栏不会时有时无。
     val categories = remember(records) {
@@ -132,13 +141,22 @@ fun RecordsScreen(
     }
 
     LaunchedEffect(searching) { if (searching) runCatching { searchFocus.requestFocus() } }
-    // 把最后一条删掉之后，右上角的管理态应该自己退出，否则会停在「空页面 + 隐形管理」。
-    LaunchedEffect(records.isEmpty()) { if (records.isEmpty()) managing = false }
+    // 把最后一条删掉之后，管理和搜索都该退出去：
+    // 记录为空时右上角没有图标，搜索框会变成一个关不掉的输入框。
+    LaunchedEffect(records.isEmpty()) {
+        if (records.isEmpty()) {
+            managing = false
+            searching = false
+            query = ""
+        }
+    }
 
     Column(
         Modifier
             .fillMaxSize()
             .background(skin.bg)
+            // 搜索框一聚焦键盘就上来，没有它列表下半截会被盖住。
+            .imePadding()
             .padding(horizontal = 22.dp)
     ) {
         Spacer(Modifier.height(14.dp))
@@ -155,6 +173,10 @@ fun RecordsScreen(
                         managing = false
                     }
                 } else {
+                    HeaderIcon(Icons.Rounded.AutoAwesome, skin.accent, skin.accentSoft, "示例") {
+                        sampleOpen = true
+                    }
+                    Spacer(Modifier.width(6.dp))
                     HeaderIcon(
                         if (searching) Icons.Rounded.Close else Icons.Rounded.Search,
                         skin.sub,
@@ -182,8 +204,13 @@ fun RecordsScreen(
             )
         }
 
+        if (records.isEmpty() && !searching) {
+            Spacer(Modifier.height(12.dp))
+            SampleEntry { sampleOpen = true }
+        }
+
         if (records.isNotEmpty()) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(12.dp))
             StatsStrip(stats)
             if (stats.mastery.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))
@@ -264,7 +291,13 @@ fun RecordsScreen(
                 Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(mistakes.size) { index ->
+                items(
+                    count = mistakes.size,
+                    key = { index ->
+                        val row = mistakes[index]
+                        "${row.record.id}-${row.mistake.step}-${row.mistake.at}"
+                    },
+                ) { index ->
                     val row = mistakes[index]
                     MistakeCard(
                         row = row,
@@ -293,6 +326,20 @@ fun RecordsScreen(
                 item { Spacer(Modifier.height(12.dp)) }
             }
         }
+    }
+
+    if (sampleOpen) {
+        SampleSheet(
+            onPick = { which ->
+                sampleOpen = false
+                when (which) {
+                    0 -> onSample(Track.CODE)
+                    1 -> onSample(Track.MATH)
+                    else -> onDocSample()
+                }
+            },
+            onDismiss = { sampleOpen = false },
+        )
     }
 
     if (confirmClear) {
@@ -344,13 +391,13 @@ private fun HeaderIcon(
     val skin = LocalSkin.current
     Box(
         Modifier
-            .size(skin.ui(30f))
+            .size(skin.ui(36f))
             .clip(CircleShape)
             .background(background)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(skin.ui(16f)))
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(skin.ui(18f)))
     }
 }
 

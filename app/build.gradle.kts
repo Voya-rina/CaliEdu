@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.application)
@@ -6,6 +7,24 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.chaquopy)
+}
+
+/**
+ * 正式签名从 key.properties 读（不进版本库）。
+ *
+ * 没有这个文件时退回调试签名——那是自测包，不能分发，同一台机器换过 keystore
+ * 之后连覆盖安装都不行。构建日志里会明确警告，免得拿错了包还以为能发。
+ */
+val signingProps = Properties().apply {
+    val f = rootProject.file("key.properties")
+    if (f.exists()) f.inputStream().use { stream -> load(stream) }
+}
+val releaseStore = signingProps.getProperty("storeFile")
+    ?.let { rootProject.file(it) }
+    ?.takeIf { it.exists() }
+
+if (releaseStore == null) {
+    logger.warn("[CaliEdu] 没有 key.properties（或 storeFile 不存在），release 包用调试签名，只能自测。")
 }
 
 android {
@@ -16,8 +35,8 @@ android {
         applicationId = "com.caliedu"
         minSdk = 31
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.6.0"
 
         // Chaquopy 17 只提供 64 位运行时；x86_64 是留给模拟器的。
         // 注意：这里一旦写了 abiFilters，就不能再开 splits.abi（AGP 会判冲突）。
@@ -27,18 +46,21 @@ android {
 
     }
 
-    /**
-     * 用 debug keystore 签 release，只是为了拿到一个"能装、体积小"的包自测。
-     * 真要分发必须换成自己的签名，别拿这个上应用商店。
-     */
     signingConfigs {
         create("local") {
-            val store = File(System.getProperty("user.home"), ".android/debug.keystore")
-            if (store.exists()) {
-                storeFile = store
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
+            if (releaseStore != null) {
+                storeFile = releaseStore
+                storePassword = signingProps.getProperty("storePassword")
+                keyAlias = signingProps.getProperty("keyAlias")
+                keyPassword = signingProps.getProperty("keyPassword")
+            } else {
+                val store = File(System.getProperty("user.home"), ".android/debug.keystore")
+                if (store.exists()) {
+                    storeFile = store
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
             }
         }
     }

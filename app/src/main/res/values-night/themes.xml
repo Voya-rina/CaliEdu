@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  深色下冷启动的第一帧。窗口背景是系统在 Compose 起来之前画的，
+  不单独给一份，深色主题会先闪一下白屏。
+-->
+<resources>
+    <style name="Theme.CaliEdu" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+    </style>
+</resources>

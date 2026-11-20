@@ -25,6 +25,23 @@ class LessonStore(context: Context) {
     }
     private val mutex = Mutex()
 
+    /** 读文件时发现损坏、把原文件改名备份后的路径。读一次就清掉。 */
+    @Volatile
+    var quarantined: String? = null
+        private set
+
+    /** 上一次写盘失败的原因；写成功时清空。 */
+    @Volatile
+    var lastWriteError: String? = null
+        private set
+
+    /** 取走「坏文件已备份」这件事，交给界面提示一次。 */
+    fun consumeQuarantine(): String? {
+        val value = quarantined
+        quarantined = null
+        return value
+    }
+
     suspend fun all(): List<LessonRecord> = withContext(Dispatchers.IO) {
         mutex.withLock { readLocked() }.sortedByDescending { it.updatedAt }
     }
@@ -33,13 +50,16 @@ class LessonStore(context: Context) {
         mutex.withLock { readLocked().firstOrNull { it.id == id } }
     }
 
-    suspend fun save(record: LessonRecord): Unit = withContext(Dispatchers.IO) {
+    /** 返回因为超出 [MAX] 被挤掉的条数，调用方据此提醒用户。 */
+    suspend fun save(record: LessonRecord): Int = withContext(Dispatchers.IO) {
         mutex.withLock {
             val list = readLocked().toMutableList()
             val index = list.indexOfFirst { it.id == record.id }
             if (index >= 0) list[index] = record else list += record
-            val trimmed = list.sortedByDescending { it.updatedAt }.take(MAX)
+            val sorted = list.sortedByDescending { it.updatedAt }
+            val trimmed = sorted.take(MAX)
             writeLocked(trimmed)
+            sorted.size - trimmed.size
         }
     }
 
@@ -51,15 +71,29 @@ class LessonStore(context: Context) {
         mutex.withLock { writeLocked(emptyList()) }
     }
 
+    /**
+     * 读全表。
+     *
+     * 反序列化失败时**绝不能**返回空表：`save()` 是「读全表 → 改一条 → 写全表」，
+     * 空表会被原样写回去，用户的历史就永久没了。坏文件先改名留证，再当空表处理。
+     */
     private fun readLocked(): List<LessonRecord> {
         if (!file.exists()) return emptyList()
+        val raw = runCatching { file.readText(Charsets.UTF_8) }.getOrElse { return emptyList() }
+        if (raw.isBlank()) return emptyList()
         return runCatching {
-            json.decodeFromString(ListSerializer, file.readText(Charsets.UTF_8))
-        }.getOrDefault(emptyList())
+            json.decodeFromString(ListSerializer, raw)
+        }.getOrElse {
+            val backup = File(file.parentFile, "${file.name}.corrupt-${System.currentTimeMillis()}")
+            runCatching { file.renameTo(backup) }
+            quarantined = backup.name
+            emptyList()
+        }
     }
 
     /** 先写临时文件再改名，避免中途被杀留下半个文件。 */
     private fun writeLocked(list: List<LessonRecord>) {
+        lastWriteError = null
         runCatching {
             val text = json.encodeToString(ListSerializer, list)
             val tmp = File(file.parentFile, "${file.name}.tmp")
@@ -68,11 +102,13 @@ class LessonStore(context: Context) {
                 file.writeText(text, Charsets.UTF_8)
                 tmp.delete()
             }
+        }.onFailure { e ->
+            lastWriteError = e.message ?: e::class.simpleName ?: "写入失败"
         }
     }
 
-    private companion object {
+    companion object {
         const val MAX = 60
-        val ListSerializer = kotlinx.serialization.builtins.ListSerializer(LessonRecord.serializer())
+        private val ListSerializer = kotlinx.serialization.builtins.ListSerializer(LessonRecord.serializer())
     }
 }
