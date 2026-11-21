@@ -238,9 +238,9 @@ private fun RelayNotes(skin: Skin) {
             Text("不用填 Key，也不用联网", fontSize = skin.smallSize, fontWeight = FontWeight.Medium, color = skin.text)
         }
         listOf(
-            "拆题时把整段提示词给你，复制走。",
+            "拆题时复制一次提示词。",
             "贴给任意模型（网页版也行），拿到 JSON。",
-            "粘回 App，自动接着往下走。",
+            "粘回来。拆题一次、写讲义一次，整节课就这两次。",
         ).forEachIndexed { index, line ->
             Row {
                 Text(

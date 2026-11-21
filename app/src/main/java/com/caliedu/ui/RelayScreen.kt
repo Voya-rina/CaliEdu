@@ -76,7 +76,7 @@ fun RelayScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.height(6.dp))
             Text(
-                "第 1 步",
+                "复制给模型",
                 fontSize = skin.fs(11f),
                 color = skin.accent,
                 fontWeight = FontWeight.Medium,
@@ -154,7 +154,7 @@ fun RelayScreen(
         }
 
         Spacer(Modifier.height(18.dp))
-        Text("第 2 步 · 把模型吐回来的内容粘在这里", fontSize = skin.fs(11f), color = skin.sub)
+        Text("把模型返回的内容粘在这里", fontSize = skin.fs(11f), color = skin.sub)
         Spacer(Modifier.height(8.dp))
 
         Box(

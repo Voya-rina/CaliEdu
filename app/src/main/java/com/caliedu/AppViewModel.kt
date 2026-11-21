@@ -66,6 +66,9 @@ private const val MAX_INPUT_CHARS = 20_000
 /** 开放题批改最多等这么久，超时就按本地判定走。 */
 private const val GRADE_TIMEOUT_MS = 45_000L
 
+/** 接力模式一批写几步。再多，单次输出就容易在 4k token 处被截断。 */
+private const val RELAY_BATCH_STEPS = 6
+
 data class Feedback(val verdict: Verdict, val text: String)
 
 /** 追问里的一条消息。 */
@@ -156,7 +159,10 @@ data class UiState(
     val isDoc: Boolean get() = plan?.steps?.firstOrNull()?.judgeKind == "none"
 
     /** 这一步能不能往下走：本步刚答对（或看过答案），或者这一课里它早就过了。 */
-    val canAdvance: Boolean get() = isDoc || progress.canAdvance || progress.idx in passed
+    val canAdvance: Boolean
+        get() = isDoc || progress.canAdvance || progress.idx in passed ||
+            // 模型偶尔漏写提问，这一步就没有可答的东西；不能因此把人钉在这一页。
+            content?.question?.prompt?.isBlank() == true
 
     /** 通读模式下判断还有哪些步骤没写。 */
     val pending: List<Int> get() = plan?.steps?.map { it.n }?.filterNot { contents.containsKey(it) } ?: emptyList()
@@ -606,7 +612,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             }
             beginLoading("正在读题")
             try {
-                openNew(generator.analyze(settings, text, track), text)
+                openNew(generator.analyze(settings, text, track), text, settings)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -615,8 +621,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 拆题成功之后：建记录、进学习页、写第一步。手输的题和同类题共用这一段。 */
-    private fun openNew(plan: LessonPlan, source: String) {
+    /** 拆题成功之后：建记录、进学习页、写讲义。手输的题和同类题共用这一段。 */
+    private fun openNew(plan: LessonPlan, source: String, settings: LlmSettings) {
         switchLesson()
         val now = System.currentTimeMillis()
         val record = LessonRecord(
@@ -660,7 +666,49 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         endLoading()
         // loadStep 开头会 work?.cancel()；此刻 work 就是正在跑的这一条，先摘掉它。
         work = null
-        loadStep(0)
+        // 接力模式下逐步写就是逐步复制粘贴：6 步课要人工往返 7 次。
+        // 这里一次把整份讲义要回来，整节课只剩两次：拆题、写讲义。
+        if (settings.mode == ChannelMode.RELAY) teachAllSteps(plan) else loadStep(0)
+    }
+
+    /**
+     * 接力模式：一次写完所有步骤。
+     *
+     * 漏写的步骤不在这里自动补——补一次就是又一次复制粘贴，
+     * 交给用户在学习页按需「补写」，一次失败不至于把人拖进第三轮。
+     */
+    private fun teachAllSteps(plan: LessonPlan) {
+        val seq = lessonSeq
+        work = viewModelScope.launch {
+            beginLoading("正在写整份讲义 · 共 ${plan.steps.size} 步")
+            try {
+                val settings = store.current()
+                // 一批最多 6 步：多数模型单次输出在 4k token 封顶，6 步正文差不多 3k。
+                val batches = plan.steps.chunked(RELAY_BATCH_STEPS)
+                val all = mutableMapOf<Int, StepContent>()
+                batches.forEach { batch ->
+                    if (seq != lessonSeq) return@launch
+                    val part = generator.teachAll(settings, plan, batch, state.notes)
+                    if (seq != lessonSeq) return@launch
+                    if (part.isEmpty()) {
+                        throw ChatException("第 ${batch.first().n}–${batch.last().n} 步没解析出来，可以在通读里点「补写」。")
+                    }
+                    all += part
+                    state = state.copy(contents = all)
+                    persist()
+                }
+                endLoading()
+                loadStep(0)
+                val missing = plan.steps.size - all.size
+                if (missing > 0) {
+                    state = state.copy(error = "有 $missing 步没写出来，可以在通读里点「补写」。")
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail(e)
+            }
+        }
     }
 
     /**
@@ -684,7 +732,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val settings = store.current()
                 val text = generator.variant(settings, plan, state.notes)
                 // 同类题沿用原题的题型，不重新猜：模型改写时可能把代码题写成应用题。
-                openNew(generator.analyze(settings, text, Track.of(plan.kind)), text)
+                openNew(generator.analyze(settings, text, Track.of(plan.kind)), text, settings)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

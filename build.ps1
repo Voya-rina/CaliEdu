@@ -183,13 +183,13 @@ function Show-Status {
     Say '  环境'
     $script:Adb = Find-Adb
     if ($script:Adb) { Say ("    adb    {0}" -f $script:Adb) }
-    else             { Say '    adb    没找到（装现成包用不了，构建不受影响）' 'Yellow' }
+    else             { Say '    adb    不可用' 'Yellow' }
 
     $script:Jdk = Find-Jdk
     if ($script:Jdk) { Say ("    JDK    {0}" -f $script:Jdk) }
-    else             { Say '    JDK    没找到（装现成包可以，编译不行）' 'Yellow' }
+    else             { Say '    JDK    不可用' 'Yellow' }
 
-    Say '  包'
+    Say '  当前已存在的包'
     Say ("    release  {0}" -f (Describe-Apk $Apks['release']))
     Say ("    debug    {0}" -f (Describe-Apk $Apks['debug']))
 
@@ -207,7 +207,7 @@ function Show-Status {
             foreach ($d in $devices) {
                 $tag = switch ($d.State) {
                     'device'       { '可用' }
-                    'unauthorized' { '未授权，手机上点允许' }
+                    'unauthorized' { '未授权，请在手机上点允许' }
                     'offline'      { '离线' }
                     default        { $d.State }
                 }
@@ -222,7 +222,7 @@ function Show-Status {
 # ---------------------------------------------------------------- 一次输入
 
 function Read-Command {
-    Say '  输一个数字（或几个词）回车就开干：'
+    Say '  请选择：'
     Say '    1  构建 release                5  装现成 release 包（不编译）'
     Say '    2  构建 debug                  6  装现成 debug 包（不编译）'
     Say '    3  构建 release 并装到手机     7  卸载手机上的 CaliEdu'
@@ -234,7 +234,7 @@ function Read-Command {
 
         $result = Parse-Command -Text $answer.Trim()
         if ($result) { return $result }
-        Say '  没看懂，输 1-8 的数字，或 build / install / fast / uninstall / refresh' 'Yellow'
+        Say '  请输入 1-8 的数字，或 build / install / fast / uninstall / refresh' 'Yellow'
     }
 }
 
@@ -288,7 +288,7 @@ function Invoke-Build {
 
     if (-not $script:Jdk) { $script:Jdk = Find-Jdk }
     if (-not $script:Jdk) {
-        Say '  [X] 找不到 JDK。Gradle 需要一个 JDK（17 或 21）。' 'Red'
+        Say '  [X] 无法找到 JDK。Gradle 需要一个 JDK（17 或 21）。' 'Red'
         Fail $null 1
     }
     $env:JAVA_HOME = $script:Jdk
@@ -305,18 +305,18 @@ function Invoke-Build {
     if ($Clean) {
         Step 'clean'
         & $gradlew 'clean' '--console=plain'
-        if ($LASTEXITCODE -ne 0) { Fail 'clean 失败，往上翻 Gradle 的报错。' 1 }
+        if ($LASTEXITCODE -ne 0) { Fail 'clean 失败' 1 }
     }
 
     $started = Get-Date
     foreach ($task in $tasks) {
         $name = $task -replace ':app:assemble', ''
-        Step ("编译 {0}（首次或刚改过代码会久一点）" -f $name)
+        Step ("编译 {0}" -f $name)
         Say ''
         & $gradlew $task '--console=plain'
         if ($LASTEXITCODE -ne 0) {
             Say ''
-            Fail ("{0} 编译失败，往上翻 Gradle 的报错。" -f $name) 1
+            Fail ("{0} 编译失败" -f $name) 1
         }
     }
     $elapsed = [int]((Get-Date) - $started).TotalSeconds
@@ -334,7 +334,7 @@ function Invoke-Build {
         Say ("       {0}" -f $path)
     }
 
-    if ($built.Count -eq 0) { Fail '编译说成功，但没找到安装包。' 1 }
+    if ($built.Count -eq 0) { Fail '成功编译，但未找到安装包' 1 }
 
     Say ''
     Say ("  CaliEdu {0} 构建完成，用时 {1} 秒" -f (Get-VersionName), $elapsed) 'Green'
@@ -346,10 +346,10 @@ function Select-Device {
     $ready = @($Devices | Where-Object { $_.State -eq 'device' })
     foreach ($d in @($Devices | Where-Object { $_.State -ne 'device' })) {
         if ($d.State -eq 'unauthorized') {
-            Say ("  [!] {0} 还没授权：看手机弹窗点『允许』，勾上『一直允许』" -f $d.Serial) 'Yellow'
+            Say ("  [!] {0} 还未授权，手机弹窗点「允许」" -f $d.Serial) 'Yellow'
         }
         elseif ($d.State -eq 'offline') {
-            Say ("  [!] {0} 离线：拔插一次数据线，或确认没被别的程序独占" -f $d.Serial) 'Yellow'
+            Say ("  [!] {0} 当前为离线状态：拔插一次数据线，或确认没被别的程序独占" -f $d.Serial) 'Yellow'
         }
     }
 
@@ -362,7 +362,7 @@ function Select-Device {
     }
     if ($NoPause) { return $ready[0].Serial }
 
-    $pick = Read-Host '  用哪台，输入序号回车（直接回车=1）'
+    $pick = Read-Host '  请选择设备（直接回车=1）'
     if ([string]::IsNullOrWhiteSpace($pick)) { $pick = '1' }
     $index = 0
     if (-not [int]::TryParse($pick, [ref]$index) -or $index -lt 1 -or $index -gt $ready.Count) {
@@ -422,7 +422,7 @@ function Invoke-Install {
 
     $apk = $Apks[$Channel]
     if ($BuildFirst) {
-        Step '4/5' ("编译 {0} 包，首次或刚改过代码会久一点" -f $Channel)
+        Step '4/5' ("编译 {0} 包" -f $Channel)
         Say ''
         # [修复] 构建段支持 -Clean
         if ($Clean) {
@@ -430,14 +430,14 @@ function Invoke-Install {
             & (Join-Path $Root 'gradlew.bat') 'clean' '--console=plain'
             if ($LASTEXITCODE -ne 0) {
                 Say ''
-                Say '  [X] clean 失败，往上翻 Gradle 的报错。' 'Red'
+                Say '  [X] clean 失败' 'Red'
                 Finish 1
             }
         }
         & (Join-Path $Root 'gradlew.bat') $Tasks[$Channel] '--console=plain'
         if ($LASTEXITCODE -ne 0) {
             Say ''
-            Say '  [X] 编译失败，往上翻 Gradle 的报错。' 'Red'
+            Say '  [X] 编译失败' 'Red'
             Finish 1
         }
     }
@@ -506,9 +506,8 @@ function Invoke-Install {
 
     Say ''
     Say '  ---------------------------------------------'
-    Say ("  装好了  CaliEdu {0}" -f $version) 'Green'
+    Say ("  CaliEdu {0} 安装完成" -f $version) 'Green'
     Say ("  通道 {0}   包 {1}" -f $Channel, (Format-Size $apkInfo.Length))
-    Say '  手机上已经打开了，解锁看一眼就行。'
 }
 
 function Invoke-Uninstall {
@@ -559,7 +558,7 @@ if ($cliInput) {
     if ($cliInput) {
         $command = Parse-Command -Text $cliInput
         if (-not $command) {
-            Say ("  [!] 没看懂参数: {0}，按默认流程走" -f $cliInput) 'Yellow'
+            Say ("  [!] 参数不合法: {0}，按默认流程" -f $cliInput) 'Yellow'
         }
     }
 }

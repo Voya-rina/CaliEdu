@@ -513,7 +513,7 @@ private fun StepBody(
             Spacer(Modifier.height(14.dp))
 
             if (content != null) {
-                Markdown(content.blocks.joinToString("\n\n") { it.md })
+                Markdown(dropDuplicateTitle(content.blocks.joinToString("\n\n") { it.md }, brief.title))
                 if (content.question.prompt.isBlank()) {
                     Spacer(Modifier.height(40.dp))
                     return@Column

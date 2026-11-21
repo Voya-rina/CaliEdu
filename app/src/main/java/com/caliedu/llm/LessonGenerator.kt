@@ -167,6 +167,117 @@ class LessonGenerator(
     }
 
     /**
+     * 一次写完一批步骤。
+     *
+     * 只在接力模式下用：直连时逐步生成可以边写边看，单次输出太长反而容易被截断。
+     * 返回的是按步号对齐的正文；模型漏掉的步骤不会编造，交给调用方决定是否补写。
+     */
+    suspend fun teachAll(
+        settings: LlmSettings,
+        plan: LessonPlan,
+        briefs: List<StepBrief>,
+        notes: String,
+    ): Map<Int, StepContent> {
+        if (briefs.isEmpty()) return emptyMap()
+        val whole = briefs.size == plan.steps.size
+        val label = if (whole) {
+            "写整份讲义（共 ${plan.steps.size} 步）"
+        } else {
+            "写第 ${briefs.first().n}–${briefs.last().n} 步（共 ${plan.steps.size} 步）"
+        }
+        val raw = channelOf(settings).complete(
+            Prompts.teachAllSystem(Track.of(plan.kind)),
+            Prompts.teachAllUser(plan, briefs, notes),
+            json = true,
+            label = label,
+        )
+        var map = parseBatch(raw, briefs)
+        // 半截 JSON 或少了 steps 外壳：补发一次比让人再复制粘贴一轮便宜。
+        if (map.isEmpty()) {
+            val fixed = repair(settings, ALL_SCHEMA, raw, "整份讲义 · 补字段")
+            map = parseBatch(fixed, briefs)
+        }
+        return map
+    }
+
+    /**
+     * 把一批步骤对齐到要写的编号上。
+     *
+     * 模型的编号经常缺、重、或者从 0 开始，所以不能直接按 n 塞：
+     * 先按 n 对号入座，对不上的再按出现顺序补空位。漏写的步骤保持缺席。
+     */
+    internal fun parseBatch(raw: String, briefs: List<StepBrief>): Map<Int, StepContent> {
+        val text = JsonRepair.extract(raw)
+            ?: salvageBatch(raw.replace(Regex("```[a-zA-Z]*"), "").replace("```", ""))
+            ?: return emptyMap()
+        val root = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return emptyMap()
+        val normalized = normalizeKeys(fixMathEscapes(root))
+        val array: JsonArray = when (normalized) {
+            is JsonArray -> normalized
+            is JsonObject -> normalized["steps"] as? JsonArray
+                ?: if (briefs.size == 1) JsonArray(listOf(normalized)) else return emptyMap()
+            else -> return emptyMap()
+        }
+        val items = array.mapNotNull {
+            runCatching { json.decodeFromJsonElement(StepContent.serializer(), it) }.getOrNull()
+        }.filter { contentOk(it) }
+        if (items.isEmpty()) return emptyMap()
+
+        val wanted = briefs.map { it.n }
+        val slots = mutableMapOf<Int, StepContent>()
+        val leftovers = mutableListOf<StepContent>()
+        items.forEach { step ->
+            if (step.n in wanted && step.n !in slots) slots[step.n] = step else leftovers += step
+        }
+        val free = wanted.filterNot { it in slots }
+        leftovers.forEachIndexed { index, step ->
+            val slot = free.getOrNull(index) ?: return@forEachIndexed
+            slots[slot] = step.copy(n = slot)
+        }
+        return slots
+    }
+
+    /**
+     * 输出被截断时，`{"steps":[...]}` 就没有闭合括号，整包作废太浪费。
+     * 这里截到最后一个完整的步骤对象，补上 `]}`，前面的正文还能用。
+     */
+    private fun salvageBatch(text: String): String? {
+        val stepsAt = text.indexOf("\"steps\"")
+        if (stepsAt < 0) return null
+        val arrayAt = text.indexOf('[', stepsAt)
+        if (arrayAt < 0) return null
+        val rootAt = text.lastIndexOf('{', stepsAt)
+        if (rootAt < 0) return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var lastEnd = -1
+        for (i in arrayAt + 1 until text.length) {
+            val c = text[i]
+            if (inString) {
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '{' -> depth++
+                '}' -> {
+                    if (depth == 0) break
+                    depth--
+                    if (depth == 0) lastEnd = i
+                }
+                ']' -> if (depth == 0) break
+            }
+        }
+        if (lastEnd < 0) return null
+        return text.substring(rootAt, lastEnd + 1) + "]}"
+    }
+
+    /**
      * 开放题的兜底批改。返回 null 表示这次不判（没网、解析失败），
      * 调用方应退回本地判定，不能因为批改失败就把学生卡住。
      */
@@ -244,7 +355,7 @@ class LessonGenerator(
         const val MAX_STEPS = 60
 
         const val PLAN_SCHEMA =
-            """{"title":"","kind":"code|math|general","oneLine":"","tags":[""],"knowledge":[""],"steps":[{"n":1,"title":"","stage":"读题|框架|预备|逐块|排错|整合|自测|建模|定路|推导|检验|收束|概念|推理|结论","goal":"","judgeKind":"choice|short|checklist"}],"needsRun":false}"""
+            """{"title":"","kind":"code|math|general","oneLine":"","tags":[""],"knowledge":[""],"steps":[{"n":1,"title":"","stage":"读题|框架|预备|逐块|排错|整合|自测|建模|定路|推导|检验|收束|概念|辨析|推理|结论","goal":"","judgeKind":"choice|short|checklist"}],"needsRun":false}"""
 
         /** 一道题最短也得有这么多字，否则多半是模型在说「好的」而不是给题。 */
         const val MIN_PROBLEM = 20
@@ -253,6 +364,8 @@ class LessonGenerator(
 
         const val STEP_SCHEMA =
             """{"n":1,"blocks":[{"depth":"core|deep","md":""}],"question":{"prompt":"","kind":"choice|short|checklist","choices":[{"label":"","value":""}],"answer":"","expect":"","rubric":[""]},"hints":["","",""],"onCorrect":"","summary":[""]}"""
+
+        val ALL_SCHEMA = """{"steps":[$STEP_SCHEMA]}"""
     }
 
     private val keyMap = mapOf(

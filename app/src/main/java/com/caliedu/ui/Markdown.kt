@@ -172,7 +172,7 @@ fun parseMarkdown(source: String): List<MdNode> {
 
 fun inlineMarkdown(source: String, skin: Skin): AnnotatedString {
     // \u0003 是转义后的字面美元号：\$5 应该原样显示 $5，不能和公式的 $ 配对。
-    val text = source
+    val text = repairNewlines(source)
         .replace("\\$", "\u0003")
         .replace("**", "\u0001")
         .replace("`", "\u0002")
@@ -242,13 +242,27 @@ fun inlineMarkdown(source: String, skin: Skin): AnnotatedString {
             }
 
             c == '$' -> {
-                val end = text.indexOf('$', i + 1)
-                val body = if (end > i + 1) text.substring(i + 1, end) else ""
-                if (looksLikeMath(body)) {
+                // 只在这一行里找闭合的 $。跨行的「公式」几乎都是模型忘了关，
+                // 真按跨行配对，整段中文都会被塞进 mathStyle 里。
+                val lineEnd = text.indexOf('\n', i).let { if (it < 0) text.length else it }
+                val close = text.indexOf('$', i + 1)
+                if (close in (i + 2) until lineEnd && looksLikeMath(text.substring(i + 1, close))) {
                     out.pushStyle(mathStyle(skin))
-                    out.append(TexLite.convert(body))
+                    out.append(TexLite.convert(text.substring(i + 1, close)))
                     out.pop()
-                    i = end + 1
+                    i = close + 1
+                } else if (close < 0 || close >= lineEnd) {
+                    // 没闭合就认到行尾为止：宁可把这一行按公式渲染，也好过印出 `$f(a)=\frac{..}`。
+                    val rest = text.substring(i + 1, lineEnd).trim()
+                    if (looksLikeMathLine(rest)) {
+                        out.pushStyle(mathStyle(skin))
+                        out.append(TexLite.convert(rest))
+                        out.pop()
+                        i = lineEnd
+                    } else {
+                        out.append(c)
+                        i++
+                    }
                 } else {
                     out.append(c)
                     i++
@@ -282,6 +296,64 @@ private fun looksLikeMath(body: String): Boolean {
     if (body.contains('\n')) return false
     if (body.any { it in '\u4e00'..'\u9fff' } && !body.contains('\\')) return false
     return true
+}
+
+/**
+ * 未闭合 `$` 之后的那一段：能按公式排就一定比印出反斜杠强，但不能把中文、
+ * 也不能把「$8」「$5.5」这种价格吞进公式。长度上限比 [looksLikeMath] 宽，推导式本来就长。
+ */
+private fun looksLikeMathLine(body: String): Boolean {
+    if (body.length < 2 || body.length > 200) return false
+    if (body.any { it in '\u4e00'..'\u9fff' } && !body.contains('\\')) return false
+    if (body.all { it.isDigit() || it in ".," }) return false
+    return true
+}
+
+/**
+ * 模型经常把换行写成字面量 `\n`（反斜杠 + n），正文于是整段粘成一行。
+ *
+ * 不能只看「n 后面是不是字母」——`$f(a)=0\nf'(x)>0` 里 `\n` 后面就是 f，
+ * 但那是换行，不是命令。所以按完整命令名判断：只有 `\nabla`、`\neq`、`\nu`
+ * 这些真实存在的命令才保留，其余一律当换行。
+ */
+internal fun repairNewlines(source: String): String {
+    if (!source.contains("\\n")) return source
+    val out = StringBuilder(source.length + 8)
+    var i = 0
+    while (i < source.length) {
+        if (source[i] == '\\' && source.getOrNull(i + 1) == 'n') {
+            var j = i + 2
+            while (j < source.length && (source[j] in 'a'..'z' || source[j] in 'A'..'Z')) j++
+            if (source.substring(i + 1, j) !in LATEX_N_COMMANDS) {
+                out.append('\n')
+                i += 2
+                continue
+            }
+        }
+        out.append(source[i])
+        i++
+    }
+    return out.toString()
+}
+
+/** 真正以 `\n` 开头的 LaTeX 命令。除这些以外，`\n` 都是模型想换行。 */
+private val LATEX_N_COMMANDS = setOf(
+    "nabla", "natural", "ncong", "ne", "nearrow", "neg", "neq", "newline",
+    "ngeq", "nleq", "nmid", "nonumber", "nolimits", "normalsize", "not", "notin",
+    "nparallel", "nrightarrow", "nsim", "nsubseteq", "nsupseteq", "nu", "nvdash",
+    "nwarrow",
+)
+
+/**
+ * 正文第一行常常是一个和步骤同名的小标题：MATH_TEACH 要求「### 动作名」，
+ * 模型基本照抄步骤标题，于是同一个名字上下连着出现两次。标题已经显示过了，这里去掉。
+ */
+internal fun dropDuplicateTitle(md: String, title: String): String {
+    val lines = md.trimStart().lines()
+    val first = lines.firstOrNull()?.trim().orEmpty()
+    if (!first.startsWith("#")) return md
+    if (first.trimStart('#').trim() != title.trim()) return md
+    return lines.drop(1).joinToString("\n").trimStart()
 }
 
 private fun mathStyle(skin: Skin) = SpanStyle(

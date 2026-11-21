@@ -113,7 +113,7 @@ fun ReadingView(
                     )
                 } else {
                     // 通读模式把 deep 块也放出来——想深看的时候正好在这儿。
-                    Markdown(content.blocks.joinToString("\n\n") { it.md })
+                    Markdown(dropDuplicateTitle(content.blocks.joinToString("\n\n") { it.md }, brief.title))
                     if (content.summary.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
                         Column(

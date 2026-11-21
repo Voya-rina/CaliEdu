@@ -8,15 +8,17 @@ import com.caliedu.model.StepBrief
  * 三套提示词，按 [Track] 分叉。
  *
  * 共同的骨架只有一句：每一步必须是一个「能独立判对错的关口」。
- * 步数不给区间——数学推导链有十几个关节就写十几步，一道口算两步就够，
- * 用固定的 3~8 步去套只会逼模型把一段推理硬塞进一步。
+ * 数学题是一条推导链，链上有十几个关节就写十几步，一道口算两步就够；
+ * 概念题反过来——它是「一个问题」，不是「一门课」，所以有硬性上限：
+ * 一句「讲一下 X」最多 4 步，再往上就是在替学生编教材目录了。
  */
 object Prompts {
 
     // ------------------------------------------------------------------ 拆题
 
     fun analyzeSystem(track: Track): String = buildString {
-        append("你是一位带过很多零基础学生的老师。你的任务不是替学生把题做完，而是把一道题拆成学生能一脚一脚踩上去的台阶。\n\n")
+        append("学生发来的可能是一道题，也可能只是一句「讲一下 X」。")
+        append("你的任务不是替他把内容写完，而是先看清他真正要什么，再把这件事拆成他能一脚一脚踩上去的台阶。\n\n")
         append(
             when (track) {
                 Track.CODE -> CODE_SPLIT
@@ -24,9 +26,11 @@ object Prompts {
                 Track.GENERAL -> GENERAL_SPLIT
             }
         )
-        append("\n\n").append(STEP_RULE)
+        append("\n\n").append(stepRule(track))
         append("\n\n").append(SOURCE_RULE)
         append("\n\n").append(analyzeFormat(track))
+        // 规模放到最后再钉一遍：模型对「输出格式之前的最后一段」最敏感。
+        if (track == Track.GENERAL) append("\n\n").append(GENERAL_SCALE)
     }
 
     fun analyzeUser(input: String, track: Track): String = buildString {
@@ -34,9 +38,19 @@ object Prompts {
             when (track) {
                 Track.CODE -> "下面是一道编程题或一份 Python 代码，请为它拆一套教学步骤：\n\n"
                 Track.MATH -> "下面是一道数学题，请为它拆一套推导步骤：\n\n"
-                Track.GENERAL -> "下面是题目原文，请为它拆一套讲解步骤：\n\n"
+                Track.GENERAL -> "下面是学生发来的一个问题或一段材料。它可能只有一句话——" +
+                    "那也只回答这一句话，不要扩成一门课。请为它拆一套讲解步骤：\n\n"
             }
         )
+        // 把「这道题有多大」直接量出来放在用户这一侧。系统提示词里的上限是通则，
+        // 模型对贴着输入的这一句更敏感。
+        if (track == Track.GENERAL) {
+            val body = input.trim()
+            when {
+                body.length <= 80 -> append("（这是 ${body.length} 字的一句话提问，按 3~4 步处理。）\n\n")
+                body.length >= 600 -> append("（材料较长，只回答它真正在问的那一个问题，不要逐段展开。）\n\n")
+            }
+        }
         append("<<<\n").append(input.trim()).append("\n>>>")
     }
 
@@ -65,13 +79,44 @@ object Prompts {
 - 不许出现「套公式算一下」「按常规方法求解」这种把整段推理塞进一句话的空步。
 - 一步里如果藏着两个各自能做错的判断，就必须拆成两步。
 - 纯计算题三步就够，别硬凑；证明题按逻辑链走，二十步也不嫌多。
+- 例外：如果输入根本不是一道题，而是一句「讲一下 X」「X 是什么」的概念请求，
+  按概念讲，3~4 步（定义 → 为什么这样定义 / 关键性质 → 一个最小例子），不要硬造一条推导链。
 """.trim()
 
     private val GENERAL_SPLIT = """
 这是一道概念题 / 简答题，没有式子也没有代码。
 
-按「问题在问什么 → 需要哪几个概念 → 它们怎么接上 → 结论」拆。
-每步要给出一个能被判对错的小结论，不要泛泛而谈的过渡。
+先分清它在问哪一种：
+A. 解释一个概念 ——「讲一下动态规划」「什么是熵」
+B. 比较两个相近的东西 ——「贪心和 DP 有什么区别」
+C. 说明一个流程或机制 ——「TCP 三次握手怎么走」
+D. 分点论述 ——「论述……的三点原因」
+
+不管哪一种，拆的都是「回答这个问题要想通哪几层」，不是「这个话题有哪些知识点」：
+1. 第一层直接回答它（定义 / 分界 / 第一步），不要先讲「我们来看题目在问什么」。
+2. 后面每一层都要建立在前一层上：去掉它，后面的结论就不成立。
+3. 最后一层收束成一段能直接说出口的回答。
+
+硬要求：
+- A / B / C 三类一共 3~4 步，D 类最多 6 步。
+- 不许有元步骤：「明确题目要求」「理清思路」「确定讲解范围」「汇总输出答案」都不算关口。
+  学生要的是答案，不是你怎么备课。
+- 一次对比就是一步，不许把一个对比拆成好几步（区分 A 与 B、A 与 C、A 与 D 各占一步）。
+- goal 只写这一层的结论要点，不超过 40 字。写满一屏，说明你在往一步里塞一整章。
+""".trim()
+
+    /**
+     * 概念题的规模上限。放在输出格式之后再说一遍——
+     * 这是「讲一下动态规划」被拆成 12 步的直接原因：
+     * 原提示词只有结构没有上限，模型就按教材目录拆。
+     */
+    private val GENERAL_SCALE = """
+规模（硬性，超了就算不合格）：
+- 一次提问最多 6 步；「讲一下 X」「什么是 X」这类 3~4 步。
+- 超过上限时按这个顺序砍：先删元步骤（明确要求 / 理清思路 / 总结全文），
+  再合并同一个判断的不同说法，最后才合并相邻的两层。
+- knowledge 只留 2~4 个，取这条主线真正用到的概念，不要把这个主题的目录抄进来。
+- oneLine 写「这道题要回答什么」，不要写「分几步讲」「面向零基础」这类教学安排。
 """.trim()
 
     /**
@@ -83,7 +128,11 @@ object Prompts {
 把它当作判断重点的依据，但不要把解析里的结论直接抄成某一问的答案，也不要原样复述整段教材。
 """.trim()
 
-    private val STEP_RULE = """
+    private fun stepRule(track: Track): String = if (track == Track.GENERAL) """
+步数：按上面的上限走（3~6 步），不按「这个主题有多少知识点」走。
+唯一的标准是——每一步都要对应一个能独立判对错的关口。
+如果你写不出一句「走完这一步，学生应该能答出什么」，这一步就该和相邻的合并。
+""".trim() else """
 步数：不设上下限。
 唯一的标准是——每一步都要对应一个能独立判对错的关口。
 如果你写不出一句「走完这一步，学生应该能答出什么」，这一步就该和相邻的合并。
@@ -92,14 +141,26 @@ object Prompts {
 
     private fun analyzeFormat(track: Track): String {
         val stages = when (track) {
-            Track.CODE -> "读题 / 框架 / 预备 / 逐块 / 排错 / 整合 / 自测"
-            Track.MATH -> "读题 / 建模 / 定路 / 推导 / 检验 / 收束"
-            Track.GENERAL -> "读题 / 概念 / 推理 / 结论"
+            Track.CODE -> listOf("读题", "框架", "预备", "逐块", "排错", "整合", "自测")
+            Track.MATH -> listOf("读题", "建模", "定路", "推导", "检验", "收束")
+            // 概念题没有「读题」：那一步在模型手里总会变成「明确题目要求」的元步骤。
+            Track.GENERAL -> listOf("概念", "辨析", "推理", "结论")
         }
         val kind = when (track) {
             Track.CODE -> "code"
             Track.MATH -> "math"
             Track.GENERAL -> "general"
+        }
+        val countRule = when (track) {
+            Track.GENERAL -> "3~6 项（「讲一下 X」这类 3~4 项）"
+            else -> "有几个关口就写几项"
+        }
+        val first = stages.first()
+        val second = stages.getOrElse(1) { first }
+        // goal 是这份 JSON 里最容易被写成一整章的地方：概念题先把它的长度钉在示例里。
+        val goalHint = when (track) {
+            Track.GENERAL -> "这一层得出的结论，不超过 40 字"
+            else -> "学生走完这一步获得了什么"
         }
         return """
 只输出一个 JSON 对象，不要解释，不要 markdown 围栏。
@@ -108,17 +169,20 @@ object Prompts {
 "tags":["分类标签1","分类标签2"],
 "knowledge":["知识点1","知识点2"],
 "steps":[
-{"n":1,"title":"第一步的名字，不超过 12 个字，不要写成疑问句","stage":"$stages","goal":"学生走完这一步获得了什么","judgeKind":"choice"},
-{"n":2,"title":"第二步的名字","stage":"$stages","goal":"……","judgeKind":"short"}
+{"n":1,"title":"第一步的名字，不超过 12 个字，不要写成疑问句","stage":"$first","goal":"$goalHint","judgeKind":"choice"},
+{"n":2,"title":"第二步的名字","stage":"$second","goal":"……","judgeKind":"short"}
 ],
 "needsRun":false}
 
-steps 是数组，有几个关口就写几项，不要只写一项也不要为了凑数硬拆。
+steps 是数组，$countRule，不要只写一项也不要为了凑数硬拆。
 tags 用来给记录页筛选。第一个元素必须原样照抄下面这份固定分类里的某一个，不要改写、不要新造：
   高等数学 / 线性代数 / 概率统计 / 离散数学 / C语言 / C++ / Python / Java / 数据结构 / 算法 / 机器学习 / 数据处理 / 其他
 第二个到第三个可以更细（每个 2~8 个字，如「数列」「分部积分」「链表」「动态规划」），也可以不写。
-stage 只能取：$stages
-judgeKind 只能取：choice / short / checklist
+stage 只能取：${stages.joinToString(" / ")}
+judgeKind 只能取：choice / short / checklist。优先 choice：学生在手机上打字，少一个符号都是减负。
+只有答案是一个数、一个单项式或一句话（≤ 20 字）时才用 short；
+要写一整条长式子或一段话，就改成 choice（正确结论 + 两三个常见错法），
+或者把提问缩小到「这一项的系数是多少」。checklist 只用于确实要分点回答的题，要点不超过 4 条。
 needsRun：只有必须真的运行代码才能验证结果时才填 true，数学题一律 false。
 """.trim()
     }
@@ -134,6 +198,7 @@ needsRun：只有必须真的运行代码才能验证结果时才填 true，数�
             }
         )
         append("\n\n").append(questionRule(track))
+        append("\n\n").append(MARKUP_RULE)
         append("\n\n").append(stepFormat)
     }
 
@@ -175,17 +240,20 @@ needsRun：只有必须真的运行代码才能验证结果时才填 true，数�
 你是这本教材的作者，正在写其中一个步骤。读者是零基础学生。
 
 写作要求：
-1. 先把这一步要回答的问题用一句话说出来，再展开。总长不超过 300 字。
+1. 第一句就把这一步的结论说出来，再解释它为什么成立、边界在哪。
+   不要写「这一步要回答的问题是……」「我们来看一下……」——那是目录，不是讲义。
 2. 只用必要的术语，第一次出现的术语要顺手解释半句。
-3. 需要举例就给一个最小的例子，不要铺三个。
-4. md 里用 Markdown，行内公式用 ${'$'}...${'$'}。
-5. hints 恰好 3 条，逐级加码：第 1 条指方向，第 2 条点出关键，第 3 条几乎给出答案。
+3. 需要举例就给一个最小的例子，只给一个，不要铺三个。
+4. 总长不超过 300 字。写不下就说明这一步拆大了，不要靠压缩句子硬塞。
+5. md 里用 Markdown，行内公式用 ${'$'}...${'$'}。
+6. hints 恰好 3 条，逐级加码：第 1 条指方向，第 2 条点出关键，第 3 条几乎给出答案。
 """.trim()
 
     private fun questionRule(track: Track): String = when (track) {
         Track.CODE -> """
 question 必须一句话问清、答案唯一。choice 给 3~4 个选项，干扰项要像学生真的会犯的错；
 answer 字段必须原样复制正确选项的 value。short 题把可接受答案写进 expect，用 | 分隔。
+short 只用于一个词或一句话；要写代码、或者答案超过 20 个字符的，一律改 choice（选出正确写法）。
 问代码逻辑，不要问名词含义。答对后的 onCorrect 先肯定，再补一句他可能没意识到的原理。
 """.trim()
 
@@ -194,16 +262,20 @@ question 的写法：
 - 优先问「下一步该做什么」或「这一步代入后得到什么」，不要问「这个概念是什么」。
 - choice 的四个选项必须是四条不同的解题动作或四个不同的式子。干扰项要像学生真会走错的岔路：
   符号漏了、方向反了、忘了定义域、忘了常数项、把必要条件当充分条件。
-- short 用于答案是一个数或一个短式子。expect 里把等价写法都用 | 隔开（如 "-1|−1|x=-1"），
-  纯数值题不要写单位。
+- short 只给「一个数 / 一个单项式 / 不超过 20 个字符的短式子」。expect 里把等价写法都用 | 隔开
+  （如 "-1|−1|x=-1"），纯数值题不要写单位。
+- 要敲一整条展开式、一长串不等式的，一律改 choice：把正确结论和三个典型错法做成选项。
+  不许让用户在手机上输入整段推导。
 - 绝不出「以上都对」「以上都不对」这种选项，也不要出需要长篇论述的题。
 - answer 字段必须原样复制正确选项的 value；short 题 answer 也要填，用于连错三次时公布。
 """.trim()
 
         Track.GENERAL -> """
 question 一句话问清、答案唯一。choice 给 3~4 个选项，干扰项要像学生真的会混淆的说法；
-answer 字段必须原样复制正确选项的 value。需要学生自己组织语言时用 checklist，
-把必须命中的要点写进 rubric，每条要点都能用一个短语判定。
+answer 字段必须原样复制正确选项的 value。
+short 只用于一句话能答完的（≤ 20 字）。答案更长就改 choice：把正确说法和两三个常见误解做成选项，
+别让用户在手机上打一段话。checklist 只在题目本来就要求分点作答时用，要点不超过 4 条。
+问的是这一步的内容本身，不许问「这道题要讲哪几件事」这种教学安排类的元问题。
 """.trim()
     }
 
@@ -215,6 +287,18 @@ answer 字段必须原样复制正确选项的 value。需要学生自己组织�
 "hints":["第一级","第二级","第三级"],"onCorrect":"答对后的回应","summary":["这一步要记住的一句话"]}
 
 blocks 里 depth 用 core 表示必读，用 deep 表示想深入才看的补充。
+""".trim()
+
+    /**
+     * 排版红线。截图里那种 `$f(a)=...\frac{1}{2}...\n得到...` 整段印成正文，
+     * 就是因为模型开了 `$` 不关、还用字面量 `\n` 当换行。渲染器已经兜底，
+     * 但源头不该产出这种东西。
+     */
+    private val MARKUP_RULE = """
+排版（写错就会直接显示成一堆反斜杠，务必遵守）：
+- 行内公式用 ${'$'}...${'$'}，开了就必须在同一行用 ${'$'} 关掉。写不下、或者超过 20 个字符，就单独成行用 ${'$'}${'$'}...${'$'}${'$'}。
+- 不要在正文里写 \n 这两个字符来表示换行；要换行就直接换行。
+- 公式只用常见 LaTeX 子集，不要用 \text{}、\begin{} 这类排版环境。
 """.trim()
 
     fun teachUser(plan: LessonPlan, brief: StepBrief, notes: String): String = buildString {
@@ -237,6 +321,68 @@ blocks 里 depth 用 core 表示必读，用 deep 表示想深入才看的补充
             append(notes)
         }
         append("\n只输出第 ").append(brief.n).append(" 步的 JSON，n 字段必须是 ").append(brief.n).append("。")
+    }
+
+    /**
+     * 接力模式：一次写完所有步骤。
+     *
+     * 逐步写意味着 6 步课要复制粘贴 7 次，手机上没人受得了；更要命的是模型看不到
+     * 其它步骤写过什么，前后经常整段重复。写作规范和单步完全一样，只换输出格式，
+     * 再加一条「不许重复」。
+     */
+    fun teachAllSystem(track: Track): String = buildString {
+        append(
+            when (track) {
+                Track.CODE -> CODE_TEACH
+                Track.MATH -> MATH_TEACH
+                Track.GENERAL -> GENERAL_TEACH
+            }
+        )
+        append("\n\n").append(questionRule(track))
+        append("\n\n").append(MARKUP_RULE)
+        append("\n\n").append(TEACH_ALL_RULE)
+    }
+
+    private val TEACH_ALL_RULE = """
+这次不是写一步，而是把整份讲义一次写完。
+
+只输出一个 JSON 对象：
+{"steps":[
+{"n":1,"blocks":[{"depth":"core","md":"第 1 步的正文"}],"question":{"prompt":"提问","kind":"choice","choices":[{"label":"显示的文字","value":"判定用的值"}],"answer":"正确选项的 value","expect":"","rubric":[]},"hints":["第一级","第二级","第三级"],"onCorrect":"答对后的回应","summary":["这一步要记住的一句话"]},
+{"n":2,"blocks":[{"depth":"core","md":"第 2 步的正文"}],"question":{"prompt":"","kind":"short","choices":[],"answer":"","expect":"能接受的答案","rubric":[]},"hints":["","",""],"onCorrect":"","summary":[]}
+]}
+
+硬要求：
+- 给定的每一步都要写，n 必须与给定编号一致，不许合并、跳号、只写前几步。
+- 每步的 question.kind 按该步给出的「判定」来；但如果按判定会让学生打一整条长式子或一段话，
+  就改成 choice（正确结论 + 两三个常见错法）。手机上少打字优先于形式一致。
+- 相邻步骤不许重复：上一步给过的定义和例子，这一步引用一句就够，不要重讲。
+- 每一步仍然遵守上面的长度限制：不要因为一次写多步就注水，也不要为了省字数把某一步压成一句话。
+- 不要输出任何解释，不要 markdown 围栏。
+""".trim()
+
+    fun teachAllUser(plan: LessonPlan, briefs: List<StepBrief>, notes: String): String = buildString {
+        val writing = briefs.map { it.n }.toSet()
+        val whole = writing.size == plan.steps.size
+        append("整道题：").append(plan.title)
+        if (plan.oneLine.isNotBlank()) append("（").append(plan.oneLine).append("）")
+        append(if (whole) "\n全部步骤，每一步都要写：\n" else "\n全部步骤，这一批只写标了「要写」的：\n")
+        plan.steps.forEach {
+            append(it.n).append(". ").append(it.title)
+            if (it.goal.isNotBlank()) append(" — ").append(it.goal)
+            append("（判定：").append(it.judgeKind).append("）")
+            if (!whole && it.n in writing) append("  ← 要写")
+            append('\n')
+        }
+        // 分批时给上一批的标题，模型才知道哪些话已经说过了。
+        val prev = plan.steps.lastOrNull { it.n < briefs.first().n }
+        if (!whole && prev != null) {
+            append("\n前面已经写过《").append(prev.title).append("》等步骤，这一步不要重复它们给过的定义和例子。\n")
+        }
+        if (notes.isNotBlank()) {
+            append("\n学生暴露过的问题（正文要针对它，但不要把答案提前说出来）：\n").append(notes).append('\n')
+        }
+        append("只输出 {\"steps\":[...]}，共 ").append(briefs.size).append(" 步。")
     }
 
     // ------------------------------------------------------------------ 出同类题
