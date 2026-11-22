@@ -28,6 +28,7 @@ import com.voyarina.caliedu.data.PdfLibrary
 import com.voyarina.caliedu.data.PdfText
 import com.voyarina.caliedu.data.Review
 import com.voyarina.caliedu.data.PdfScanner
+import com.voyarina.caliedu.data.SUPPORTED_HINT
 import com.voyarina.caliedu.data.LlmSettings
 import com.voyarina.caliedu.data.SettingsStore
 import com.voyarina.caliedu.data.ThemeMode
@@ -411,7 +412,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 单独挑几个文件收进资料夹，和文件夹扫出来的并列。
-     * 只认 PDF / md / txt / tex：别的收进来也只是占一行点不动。
+     * 只认 md / txt / tex（PDF 暂时关掉了）：别的收进来也只是占一行点不动。
      */
     fun addFiles(uris: List<Uri>) {
         if (uris.isEmpty()) return
@@ -428,7 +429,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val skipped = uris.size - added.size
             when {
                 added.isEmpty() ->
-                    state = state.copy(error = "这几个文件收不进来：只认 PDF、md、txt、tex。")
+                    state = state.copy(error = "这几个文件收不进来：$SUPPORTED_HINT。")
 
                 skipped > 0 -> toast("收了 ${added.size} 个，跳过 $skipped 个不支持的")
                 else -> toast("收了 ${added.size} 个文件")
@@ -541,7 +542,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val item = withContext(Dispatchers.IO) { describe(ctx, uri, keep = false) }
             if (item == null) {
                 state = state.copy(libraryBusy = false)
-                toast("只认 PDF、md、txt、tex")
+                toast(SUPPORTED_HINT)
                 return@launch
             }
             when {

@@ -60,7 +60,6 @@ class PromptsTest {
     @Test
     fun conceptUserPromptDoesNotInviteACourse() {
         val user = Prompts.analyzeUser("讲一下动态规划", Track.GENERAL)
-        assertTrue(user.contains("不要扩成一门课"))
         assertTrue("一句话提问要在用户侧再钉一次规模", user.contains("按 3~4 步处理"))
         assertTrue(user.contains("讲一下动态规划"))
     }

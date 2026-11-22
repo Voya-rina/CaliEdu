@@ -43,6 +43,7 @@ import com.voyarina.caliedu.core.Category
 @Composable
 fun StepDirectorySheet(
     state: UiState,
+    currentIndex: Int = state.progress.idx,
     onPick: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -97,7 +98,7 @@ fun StepDirectorySheet(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 itemsIndexed(plan.steps, key = { _, brief -> brief.n }) { index, brief ->
-                    val current = index == state.progress.idx
+                    val current = index == currentIndex
                     val ready = state.contents.containsKey(brief.n)
                     val passed = index in state.passed
                     Row(

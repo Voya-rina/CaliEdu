@@ -1,5 +1,6 @@
 package com.voyarina.caliedu
 
+import com.voyarina.caliedu.data.PDF_ENABLED
 import com.voyarina.caliedu.data.PdfItem
 import com.voyarina.caliedu.data.PdfLibrary
 import org.junit.Assert.assertEquals
@@ -64,14 +65,21 @@ class LibraryMergeTest {
     }
 
     @Test
-    fun countsFollowTheMergedList() {
+    fun countsFollowWhatIsVisible() {
         val lib = PdfLibrary(items = listOf(item("a.pdf")))
             .plus(item("b.md"))
             .plus(item("c.txt"))
-        assertEquals(1, lib.pdfCount)
+        assertEquals("PDF 收进来过，但眼下不列在界面上", 0, lib.pdfCount)
         assertEquals(2, lib.usableCount)
         assertTrue(lib.hasAny)
-        assertEquals(30L, lib.totalSize)
+        assertEquals(20L, lib.totalSize)
+    }
+
+    @Test
+    fun pdfSupportFollowsTheSwitch() {
+        assertEquals(PDF_ENABLED, item("a.pdf").supported)
+        assertTrue("md 一直是能用的", item("a.md").supported)
+        assertTrue("tex 也算文本", item("a.tex").supported)
     }
 
     @Test

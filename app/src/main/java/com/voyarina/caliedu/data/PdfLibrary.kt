@@ -5,6 +5,16 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import kotlinx.serialization.Serializable
 
+/**
+ * 抽 PDF 文字层暂时不可用，先把整条入口藏起来：
+ * 扫描跳过 PDF、收文件拒收、列表不显示，已经收过的 PDF 也不再列出来。
+ * 引擎修好后把这里改成 true 就全恢复。
+ */
+const val PDF_ENABLED = false
+
+/** 拒收时说清认哪些类型。PDF 关掉时别把人往 PDF 上引。 */
+val SUPPORTED_HINT: String get() = if (PDF_ENABLED) "只认 PDF、md、txt、tex" else "只认 md、txt、tex"
+
 /** 资料夹里的一个文件。uri 是 SAF 的 document uri，带持久授权。 */
 @Serializable
 data class PdfItem(
@@ -21,7 +31,7 @@ data class PdfItem(
     /** 有分节结构的 md：能当讲义读，也能当素材出题。 */
     val isMarkdown: Boolean get() = name.endsWith(".md", ignoreCase = true) || name.endsWith(".markdown", ignoreCase = true)
 
-    val supported: Boolean get() = isPdf || isText
+    val supported: Boolean get() = isText || (isPdf && PDF_ENABLED)
 
     companion object {
         val TEXT_SUFFIXES = listOf(".md", ".markdown", ".txt", ".tex", ".text")
@@ -47,13 +57,16 @@ data class PdfLibrary(
     /** 列表里真正要显示的：扫描结果在前，单独挑的在后，同一个文件只留一条。 */
     val allItems: List<PdfItem> get() = (items + extraItems).distinctBy { it.uri }
 
-    val totalSize: Long get() = allItems.sumOf { it.size }
+    /** 界面上看得见的那些。PDF 关掉之后，之前收过的也不会再冒出来。 */
+    val visibleItems: List<PdfItem> get() = allItems.filter { it.supported }
 
-    val usableCount: Int get() = allItems.count { it.isText }
+    val totalSize: Long get() = visibleItems.sumOf { it.size }
 
-    val pdfCount: Int get() = allItems.count { it.isPdf }
+    val usableCount: Int get() = visibleItems.count { it.isText }
 
-    val hasAny: Boolean get() = allItems.isNotEmpty()
+    val pdfCount: Int get() = visibleItems.count { it.isPdf }
+
+    val hasAny: Boolean get() = visibleItems.isNotEmpty()
 
     /** 收一个单独挑的文件。已经在文件夹扫描里出现的，不再重复记一份。 */
     fun plus(item: PdfItem): PdfLibrary {
@@ -130,7 +143,7 @@ object PdfScanner {
                         mime == DocumentsContract.Document.MIME_TYPE_DIR ->
                             walk(resolver, tree, id, depth + 1, out)
 
-                        mime == "application/pdf" || name.endsWith(".pdf", ignoreCase = true) ||
+                        (PDF_ENABLED && (mime == "application/pdf" || name.endsWith(".pdf", ignoreCase = true))) ||
                             PdfItem.TEXT_SUFFIXES.any { name.endsWith(it, ignoreCase = true) } ->
                             out += PdfItem(
                                 name = name,

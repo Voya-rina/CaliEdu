@@ -110,7 +110,7 @@ fun SettingsHome(
                 title = "资料",
                 trailing = when {
                     state.libraryBusy -> "读取中…"
-                    state.library.hasAny -> "${state.library.allItems.size} 个"
+                    state.library.hasAny -> "${state.library.visibleItems.size} 个"
                     else -> "未选择"
                 },
                 accent = state.library.hasAny,

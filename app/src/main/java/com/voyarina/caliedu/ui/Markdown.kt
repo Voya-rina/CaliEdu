@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -405,12 +404,11 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
 
                 is MdNode.Code -> CodeBlock(node.lang, node.code, skin)
 
-                is MdNode.Quote -> Row(Modifier.heightIn(min = 20.dp)) {
+                is MdNode.Quote -> Row(Modifier.height(IntrinsicSize.Min)) {
                     Box(
                         Modifier
                             .width(3.dp)
-                            .heightIn(min = 20.dp)
-                            .align(Alignment.CenterVertically)
+                            .fillMaxHeight()
                             .background(if (skin.style == UiStyle.PRINT) skin.amber else skin.line)
                     )
                     Spacer(Modifier.width(12.dp))

@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.rounded.FolderOpen
-import androidx.compose.material.icons.rounded.PictureAsPdf
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -62,7 +61,6 @@ fun LibraryScreen(
 ) {
     val skin = LocalSkin.current
     val context = LocalContext.current
-    var pdfPick by remember { mutableStateOf<PdfItem?>(null) }
     var removeAsk by remember { mutableStateOf<PdfItem?>(null) }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -83,7 +81,7 @@ fun LibraryScreen(
         Spacer(Modifier.height(10.dp))
         PageHeader("资料", onBack)
         Text(
-            "文件夹和单个文件都在这里。md 按章切节当讲义读，PDF 抽文字出题。",
+            "文件夹和单个文件都在这里。md 按章切节当讲义读，也能拆成题目。",
             fontSize = skin.fs(11.5f),
             lineHeight = skin.fs(18f),
             color = skin.sub,
@@ -114,9 +112,9 @@ fun LibraryScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            if (library.allItems.isEmpty() && !busy) {
+            if (library.visibleItems.isEmpty() && !busy) {
                 Text(
-                    "这个文件夹里没有 PDF，也没有 md / txt / tex。换一个，或者直接收几个文件。",
+                    "这里没有 md / txt / tex。换一个文件夹，或者直接收几个文件。",
                     fontSize = skin.smallSize,
                     lineHeight = skin.fs(21f),
                     color = skin.sub,
@@ -124,42 +122,28 @@ fun LibraryScreen(
             }
 
             LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(library.allItems, key = { it.uri }) { item ->
+                items(library.visibleItems, key = { it.uri }) { item ->
                     PdfRow(
                         item = item,
                         busy = busy,
                         removable = library.extraItems.any { it.uri == item.uri },
                         onDoc = { onDoc(item) },
-                        onUse = { if (item.isText) onUse(item, 1, 10) else pdfPick = item },
+                        onUse = { onUse(item, 1, 10) },
                         onLongPress = { if (library.extraItems.any { it.uri == item.uri }) removeAsk = item },
                     ) {
                         runCatching {
                             context.startActivity(
                                 Intent(Intent.ACTION_VIEW).apply {
-                                    setDataAndType(
-                                        Uri.parse(item.uri),
-                                        if (item.isPdf) "application/pdf" else "text/plain",
-                                    )
+                                    setDataAndType(Uri.parse(item.uri), "text/plain")
                                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                                 }
                             )
-                        }.onFailure { onToast(if (item.isPdf) "没有能打开 PDF 的应用" else "没有能打开它的应用") }
+                        }.onFailure { onToast("没有能打开它的应用") }
                     }
                 }
                 item { Spacer(Modifier.height(12.dp)) }
             }
         }
-    }
-
-    pdfPick?.let { item ->
-        PageRangeDialog(
-            fileName = item.name,
-            onConfirm = { start, count ->
-                pdfPick = null
-                onUse(item, start, count)
-            },
-            onDismiss = { pdfPick = null },
-        )
     }
 
     removeAsk?.let { item ->
@@ -202,7 +186,7 @@ private fun EmptyLibrary(busy: Boolean, onPickFiles: () -> Unit, onPickFolder: (
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "收几个 md / PDF，或者直接选一个装满课件的文件夹（子文件夹也会读进来）。",
+            "收几个 md / txt 进来，或者直接选一个装满课件的文件夹（子文件夹也会读进来）。",
             fontSize = skin.fs(11.5f),
             lineHeight = skin.fs(18f),
             color = skin.sub,
@@ -239,7 +223,7 @@ private fun FolderCard(library: PdfLibrary, busy: Boolean, onRescan: () -> Unit)
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    "${library.items.size} 个文件 · ${formatSize(library.totalSize)} · ${formatTime(library.scannedAt)}",
+                    "${library.visibleItems.size} 个文件 · ${formatSize(library.totalSize)} · ${formatTime(library.scannedAt)}",
                     fontSize = skin.fs(11f),
                     color = skin.sub,
                 )
@@ -279,13 +263,13 @@ private fun PdfRow(
         Box(
             Modifier
                 .size(30.dp)
-                .background(if (item.isText) skin.accentSoft else skin.codeBg, RoundedCornerShape(7.dp)),
+                .background(skin.accentSoft, RoundedCornerShape(7.dp)),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                if (item.isText) Icons.AutoMirrored.Rounded.Article else Icons.Rounded.PictureAsPdf,
+                Icons.AutoMirrored.Rounded.Article,
                 contentDescription = null,
-                tint = if (item.isText) skin.accent else skin.sub,
+                tint = skin.accent,
                 modifier = Modifier.size(skin.ui(16f)),
             )
         }
@@ -312,8 +296,7 @@ private fun PdfRow(
                 Spacer(Modifier.width(6.dp))
                 Pill(label = "出题", filled = false, enabled = !busy, onClick = onUse)
             }
-            item.isText -> Pill(label = "出题", filled = true, enabled = !busy, onClick = onUse)
-            else -> Pill(label = "抽文字", filled = false, enabled = !busy, onClick = onUse)
+            else -> Pill(label = "出题", filled = true, enabled = !busy, onClick = onUse)
         }
     }
 }

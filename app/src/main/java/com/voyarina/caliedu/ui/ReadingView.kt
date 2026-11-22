@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -38,6 +39,7 @@ import com.voyarina.caliedu.UiState
 @Composable
 fun ReadingView(
     state: UiState,
+    listState: LazyListState,
     onGenerate: (Int) -> Unit,
     onFocusStep: (Int) -> Unit,
 ) {
@@ -45,7 +47,8 @@ fun ReadingView(
     val plan = state.plan ?: return
 
     LazyColumn(
-        Modifier
+        state = listState,
+        modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),

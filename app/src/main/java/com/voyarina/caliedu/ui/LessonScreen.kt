@@ -82,6 +82,7 @@ import com.voyarina.caliedu.core.Verdict
 import com.voyarina.caliedu.data.ChannelMode
 import com.voyarina.caliedu.model.Choice
 import com.voyarina.caliedu.model.StepContent
+import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -135,6 +136,8 @@ fun LessonScreen(
     var turning by remember { mutableStateOf(false) }
     var bodyWidth by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    // 通读是一整条 LazyColumn：目录跳转要滚它，所以状态得放在这一层。
+    val readingList = rememberLazyListState()
 
     fun slideTo(target: Float, spec: AnimationSpec<Float>) {
         // 拖动中途要能打断上一段动画，animateTo 天然会取消前一段。
@@ -270,9 +273,14 @@ fun LessonScreen(
 
         if (state.reading) {
             Box(Modifier.weight(1f)) {
-                ReadingView(state = state, onGenerate = onGenerate, onFocusStep = onFocusStep)
+                ReadingView(
+                    state = state,
+                    listState = readingList,
+                    onGenerate = onGenerate,
+                    onFocusStep = onFocusStep,
+                )
             }
-            ReadToolbar(state, onGenerate)
+            ReadToolbar(state, onGenerate, onToc = { dirOpen = true })
         } else {
             Segments(
                 total = plan.steps.size,
@@ -375,9 +383,20 @@ fun LessonScreen(
     if (dirOpen) {
         StepDirectorySheet(
             state = state,
+            // 通读时「当前」指屏幕顶端那一节，而不是游标停在哪一步。
+            currentIndex = if (state.reading) {
+                (readingList.firstVisibleItemIndex - 1).coerceIn(0, maxOf(0, plan.steps.lastIndex))
+            } else {
+                state.progress.idx
+            },
             onPick = { index ->
                 dirOpen = false
-                onJump(index)
+                if (state.reading) {
+                    // 通读时不动游标，滚到那一节就行。首项是知识点那行，所以要 +1。
+                    scope.launch { runCatching { readingList.animateScrollToItem(index + 1) } }
+                } else {
+                    onJump(index)
+                }
             },
             onDismiss = { dirOpen = false },
         )
@@ -416,7 +435,7 @@ private fun ExportMenu(allowPlay: Boolean, onExport: (ExportKind) -> Unit) {
 }
 
 @Composable
-private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
+private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit, onToc: () -> Unit) {
     val skin = LocalSkin.current
     val nextMissing = state.plan?.steps?.indexOfFirst { !state.contents.containsKey(it.n) } ?: -1
     Column(Modifier.background(skin.bg)) {
@@ -434,6 +453,14 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                "目录",
+                fontSize = skin.fs(12.5f),
+                color = skin.accent,
+                modifier = Modifier
+                    .clickable(onClick = onToc)
+                    .padding(end = 14.dp, top = 4.dp, bottom = 4.dp),
+            )
             Text("已写 ${state.contents.size} / ${state.stepCount} 步", fontSize = skin.fs(12f), color = skin.sub)
             Spacer(Modifier.weight(1f))
             if (nextMissing >= 0 && !state.offline) {
