@@ -13,4 +13,4 @@
 }
 
 # 导出用的 FileProvider 与打印 Activity 由系统按名字启动
--keep class com.caliedu.ui.PrintActivity { *; }
+-keep class com.voyarina.caliedu.ui.PrintActivity { *; }

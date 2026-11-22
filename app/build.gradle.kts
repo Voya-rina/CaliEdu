@@ -28,15 +28,15 @@ if (releaseStore == null) {
 }
 
 android {
-    namespace = "com.caliedu"
+    namespace = "com.voyarina.caliedu"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.caliedu"
+        applicationId = "com.voyarina.caliedu"
         minSdk = 31
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.7.0"
 
         // Chaquopy 17 只提供 64 位运行时；x86_64 是留给模拟器的。
         // 注意：这里一旦写了 abiFilters，就不能再开 splits.abi（AGP 会判冲突）。

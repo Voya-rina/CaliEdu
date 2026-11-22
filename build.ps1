@@ -36,8 +36,8 @@ $Root = $PSScriptRoot
 if (-not $Root) { $Root = Split-Path -Parent $MyInvocation.MyCommand.Path }
 Set-Location -LiteralPath $Root
 
-$AppId    = 'com.caliedu'
-$Activity = 'com.caliedu/.MainActivity'
+$AppId    = 'com.voyarina.caliedu'
+$Activity = 'com.voyarina.caliedu/.MainActivity'
 $script:Adb = $null
 $script:Jdk = $null
 
