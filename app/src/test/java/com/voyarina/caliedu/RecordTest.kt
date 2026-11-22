@@ -7,38 +7,43 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 /**
- * 进度条不再等同于「光标停在第几步」。
+ * 记录卡上的进度条表示「上次停在哪」，不是「过了几关」。
  *
- * 翻回第 3 步看一眼，光标会退回去；如果还按光标算，整条进度条会跟着倒退。
- * 现在按「过了几步」算，旧记录没有 passed 字段时退回 cursor。
+ * 过了 20 步、退出时却在第 8 步，条就该停在第 8 步 —— 那才是你打开它时的位置。
+ * 数字和卡片上「第 8 / 25 步」那句保持一致，所以游标要 +1 再除。
  */
 class RecordTest {
 
-    private fun record(cursor: Int, passed: List<Int>) = LessonRecord(
+    private fun record(cursor: Int, passed: List<Int> = emptyList()) = LessonRecord(
         plan = LessonPlan(steps = List(10) { StepBrief(n = it + 1, title = "第${it + 1}步") }),
         cursor = cursor,
         passed = passed,
     )
 
     @Test
-    fun ratioCountsPassedSteps() {
-        assertEquals(0.4f, record(cursor = 1, passed = listOf(0, 1, 2, 3)).ratio, 0.001f)
+    fun barFollowsTheCursor() {
+        assertEquals(0.4f, record(cursor = 3).ratio, 0.001f)
     }
 
     @Test
-    fun ratioIgnoresCursorWhenPassedExists() {
-        // 翻回第 2 步看，光标倒退，但进度条不该倒退
-        assertEquals(0.5f, record(cursor = 1, passed = (0..4).toList()).ratio, 0.001f)
+    fun passedStepsDoNotMoveTheBar() {
+        assertEquals(0.1f, record(cursor = 0, passed = (0..9).toList()).ratio, 0.001f)
     }
 
     @Test
-    fun oldRecordFallsBackToCursor() {
-        assertEquals(0.3f, record(cursor = 3, passed = emptyList()).ratio, 0.001f)
+    fun jumpingBackShowsWhereYouLeft() {
+        // 过了一多半，但退出时翻回了第 2 步：条跟着退回去，和「第 2 / 10 步」一致。
+        assertEquals(0.2f, record(cursor = 1, passed = (0..7).toList()).ratio, 0.001f)
+    }
+
+    @Test
+    fun lastStepIsFull() {
+        assertEquals(1f, record(cursor = 9).ratio, 0.001f)
     }
 
     @Test
     fun ratioStaysInRange() {
-        assertEquals(1f, record(cursor = 99, passed = emptyList()).ratio, 0.001f)
+        assertEquals(1f, record(cursor = 99).ratio, 0.001f)
         assertEquals(0f, LessonRecord().ratio, 0.001f)
     }
 }

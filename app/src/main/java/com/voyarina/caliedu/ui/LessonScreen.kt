@@ -29,26 +29,25 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Chat
-import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Code
-import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Functions
-import androidx.compose.material.icons.rounded.IosShare
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -118,7 +117,7 @@ fun LessonScreen(
     val brief = state.brief
     val track = Track.of(plan.kind)
     var dirOpen by remember { mutableStateOf(false) }
-    var fontOpen by remember { mutableStateOf(false) }
+    var settingsOpen by remember { mutableStateOf(false) }
 
     // 答题框的选区要和底栏的符号条共用：符号要插在光标处，String 拿不到光标。
     val question = state.content?.question
@@ -138,6 +137,9 @@ fun LessonScreen(
     val scope = rememberCoroutineScope()
     // 通读是一整条 LazyColumn：目录跳转要滚它，所以状态得放在这一层。
     val readingList = rememberLazyListState()
+    // 首项是知识点那行，节号 = 首项 - 1。不读的时候这个值恒为 0，没人用。
+    val readingIndex = (readingList.firstVisibleItemIndex - 1)
+        .coerceIn(0, maxOf(0, plan.steps.lastIndex))
 
     fun slideTo(target: Float, spec: AnimationSpec<Float>) {
         // 拖动中途要能打断上一段动画，animateTo 天然会取消前一段。
@@ -197,19 +199,35 @@ fun LessonScreen(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回", tint = skin.accent)
             }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    plan.title,
-                    fontSize = skin.smallSize,
-                    fontWeight = FontWeight.Medium,
-                    color = skin.text,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            // 标题这一整块就是目录入口：点它弹目录，右边只留一个齿轮。
+            Column(
+                Modifier
+                    .weight(1f)
+                    .clickable { dirOpen = true }
+                    .padding(vertical = 4.dp),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        plan.title,
+                        fontSize = skin.smallSize,
+                        fontWeight = FontWeight.Medium,
+                        color = skin.text,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        Icons.Rounded.ExpandMore,
+                        contentDescription = "目录",
+                        tint = skin.sub.copy(alpha = 0.5f),
+                        modifier = Modifier.size(skin.ui(13f)),
+                    )
+                }
                 val tag = Category.majorOf(plan)
                 val unit = if (state.isDoc) "节" else "步"
                 val meta = when {
-                    state.reading -> "通读 · 共 ${plan.steps.size} $unit"
+                    state.reading -> "通读 · 第 ${readingIndex + 1} / ${plan.steps.size} $unit"
                     state.isDoc -> "第 ${state.progress.idx + 1} / ${plan.steps.size} $unit · $tag"
                     state.offline -> "示例 · 第 ${state.progress.idx + 1} 步"
                     else -> buildString {
@@ -233,21 +251,13 @@ fun LessonScreen(
                     )
                 }
             }
-            IconButton(onClick = { fontOpen = true }) {
+            IconButton(onClick = { settingsOpen = true }) {
                 Icon(
-                    Icons.Rounded.FormatSize,
-                    contentDescription = "字号",
+                    Icons.Rounded.Settings,
+                    contentDescription = "阅读设置",
                     tint = skin.sub,
                 )
             }
-            IconButton(onClick = onToggleReading) {
-                Icon(
-                    if (state.reading) Icons.Rounded.ViewAgenda else Icons.AutoMirrored.Rounded.MenuBook,
-                    contentDescription = if (state.reading) "回到单步" else "通读",
-                    tint = skin.sub,
-                )
-            }
-            ExportMenu(allowPlay = state.settings.runCode && track == Track.CODE, onExport = onExport)
         }
 
         if (state.reviewing) {
@@ -271,6 +281,13 @@ fun LessonScreen(
             }
         }
 
+        Segments(
+            total = plan.steps.size,
+            // 通读时这条线跟着滚动走：读到哪一节，线就填到哪一节。
+            current = if (state.reading) readingIndex else state.progress.idx,
+            skin = skin,
+            onClick = { dirOpen = true },
+        )
         if (state.reading) {
             Box(Modifier.weight(1f)) {
                 ReadingView(
@@ -280,14 +297,8 @@ fun LessonScreen(
                     onFocusStep = onFocusStep,
                 )
             }
-            ReadToolbar(state, onGenerate, onToc = { dirOpen = true })
+            ReadToolbar(state, onGenerate)
         } else {
-            Segments(
-                total = plan.steps.size,
-                current = state.progress.idx,
-                skin = skin,
-                onClick = { dirOpen = true },
-            )
             Box(
                 Modifier
                     .weight(1f)
@@ -371,12 +382,22 @@ fun LessonScreen(
         )
     }
 
-    if (fontOpen) {
-        FontDialog(
+    if (settingsOpen) {
+        LessonSettingsSheet(
             scale = state.textScale,
-            onChange = onScale,
-            onCommit = onScaleCommit,
-            onDismiss = { fontOpen = false },
+            reading = state.reading,
+            allowPlay = state.settings.runCode && track == Track.CODE,
+            onChangeScale = onScale,
+            onCommitScale = onScaleCommit,
+            onToggleReading = {
+                settingsOpen = false
+                onToggleReading()
+            },
+            onExport = { kind ->
+                settingsOpen = false
+                onExport(kind)
+            },
+            onDismiss = { settingsOpen = false },
         )
     }
 
@@ -384,11 +405,7 @@ fun LessonScreen(
         StepDirectorySheet(
             state = state,
             // 通读时「当前」指屏幕顶端那一节，而不是游标停在哪一步。
-            currentIndex = if (state.reading) {
-                (readingList.firstVisibleItemIndex - 1).coerceIn(0, maxOf(0, plan.steps.lastIndex))
-            } else {
-                state.progress.idx
-            },
+            currentIndex = if (state.reading) readingIndex else state.progress.idx,
             onPick = { index ->
                 dirOpen = false
                 if (state.reading) {
@@ -403,41 +420,125 @@ fun LessonScreen(
     }
 }
 
+/**
+ * 字号、单步/通读、导出，原来占着标题栏三个位置，挤得标题只剩半个字。
+ * 现在都收在这个面板里。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ExportMenu(allowPlay: Boolean, onExport: (ExportKind) -> Unit) {
+private fun LessonSettingsSheet(
+    scale: Float,
+    reading: Boolean,
+    allowPlay: Boolean,
+    onChangeScale: (Float) -> Unit,
+    onCommitScale: () -> Unit,
+    onToggleReading: () -> Unit,
+    onExport: (ExportKind) -> Unit,
+    onDismiss: () -> Unit,
+) {
     val skin = LocalSkin.current
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton(onClick = { open = true }) {
-            Icon(Icons.Rounded.IosShare, contentDescription = "导出", tint = skin.sub, modifier = Modifier.size(skin.ui(20f)))
-        }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            DropdownMenuItem(
-                text = { Text("导出 Markdown", fontSize = skin.smallSize) },
-                onClick = { open = false; onExport(ExportKind.MARKDOWN) },
-            )
-            DropdownMenuItem(
-                text = { Text("打印成 PDF", fontSize = skin.smallSize) },
-                onClick = { open = false; onExport(ExportKind.PDF) },
-            )
-            DropdownMenuItem(
-                text = { Text("复制全文", fontSize = skin.smallSize) },
-                onClick = { open = false; onExport(ExportKind.COPY) },
-            )
-            if (allowPlay) {
-                DropdownMenuItem(
-                    text = { Text("试跑这段代码", fontSize = skin.smallSize) },
-                    onClick = { open = false; onExport(ExportKind.PLAY) },
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = skin.bg,
+        dragHandle = {
+            Box(Modifier.padding(vertical = 10.dp)) {
+                Box(
+                    Modifier
+                        .width(36.dp)
+                        .height(4.dp)
+                        .background(skin.line, CircleShape)
                 )
             }
+        },
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp)) {
+            SectionLabel("字号")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("A", fontSize = skin.fs(11.5f), color = skin.sub)
+                Slider(
+                    value = scale,
+                    onValueChange = onChangeScale,
+                    onValueChangeFinished = onCommitScale,
+                    valueRange = 0.9f..1.4f,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 10.dp),
+                )
+                Text("A", fontSize = skin.fs(22f), color = skin.sub)
+            }
+
+            Spacer(Modifier.height(16.dp))
+            SectionLabel("阅读方式")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ModePill("单步", active = !reading) { onToggleReading() }
+                ModePill("通读", active = reading) { onToggleReading() }
+            }
+
+            Spacer(Modifier.height(18.dp))
+            SectionLabel("导出")
+            SheetRow("Markdown 文件") { onExport(ExportKind.MARKDOWN) }
+            SheetRow("打印成 PDF") { onExport(ExportKind.PDF) }
+            SheetRow("复制全文") { onExport(ExportKind.COPY) }
+            if (allowPlay) SheetRow("试跑这段代码") { onExport(ExportKind.PLAY) }
+            Spacer(Modifier.height(26.dp))
         }
     }
 }
 
 @Composable
-private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit, onToc: () -> Unit) {
+private fun SectionLabel(text: String) {
+    val skin = LocalSkin.current
+    Text(
+        text,
+        fontSize = skin.fs(11f),
+        letterSpacing = 0.6.sp,
+        color = skin.sub,
+        modifier = Modifier.padding(start = 2.dp, bottom = 6.dp),
+    )
+}
+
+@Composable
+private fun ModePill(label: String, active: Boolean, onClick: () -> Unit) {
+    val skin = LocalSkin.current
+    Text(
+        label,
+        fontSize = skin.fs(12.5f),
+        color = if (active) skin.onAccent else skin.sub,
+        modifier = Modifier
+            .background(if (active) skin.accent else skin.codeBg, RoundedCornerShape(100.dp))
+            .clickable(enabled = !active) { onClick() }
+            .padding(horizontal = 18.dp, vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun SheetRow(label: String, onClick: () -> Unit) {
+    val skin = LocalSkin.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = skin.smallSize, color = skin.text, modifier = Modifier.weight(1f))
+        Icon(
+            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+            contentDescription = null,
+            tint = skin.line,
+            modifier = Modifier.size(skin.ui(16f)),
+        )
+    }
+}
+
+@Composable
+private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit) {
     val skin = LocalSkin.current
     val nextMissing = state.plan?.steps?.indexOfFirst { !state.contents.containsKey(it.n) } ?: -1
+    // 都写完了就别留一条只有「已写 25 / 25 步」的空栏占着底部。
+    if (nextMissing < 0 || state.offline) return
     Column(Modifier.background(skin.bg)) {
         if (skin.style != UiStyle.MATERIAL) {
             Box(
@@ -453,37 +554,28 @@ private fun ReadToolbar(state: UiState, onGenerate: (Int) -> Unit, onToc: () -> 
                 .padding(horizontal = 20.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(
-                "目录",
-                fontSize = skin.fs(12.5f),
-                color = skin.accent,
-                modifier = Modifier
-                    .clickable(onClick = onToc)
-                    .padding(end = 14.dp, top = 4.dp, bottom = 4.dp),
-            )
             Text("已写 ${state.contents.size} / ${state.stepCount} 步", fontSize = skin.fs(12f), color = skin.sub)
             Spacer(Modifier.weight(1f))
-            if (nextMissing >= 0 && !state.offline) {
-                val busy = state.waitingStep >= 0
-                Row(
-                    Modifier
-                        .clickable(enabled = !busy) { onGenerate(nextMissing) },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (busy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(skin.ui(12f)),
-                            strokeWidth = 1.5.dp,
-                            color = skin.accent,
-                        )
-                        Spacer(Modifier.width(7.dp))
-                    }
-                    Text(
-                        if (busy) "正在写…" else "补写第 ${nextMissing + 1} 步",
-                        fontSize = skin.fs(12.5f),
-                        color = if (busy) skin.sub else skin.accent,
+            val busy = state.waitingStep >= 0
+            Row(
+                Modifier
+                    .clickable(enabled = !busy) { onGenerate(nextMissing) }
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(skin.ui(12f)),
+                        strokeWidth = 1.5.dp,
+                        color = skin.accent,
                     )
+                    Spacer(Modifier.width(7.dp))
                 }
+                Text(
+                    if (busy) "正在写…" else "补写第 ${nextMissing + 1} 步",
+                    fontSize = skin.fs(12.5f),
+                    color = if (busy) skin.sub else skin.accent,
+                )
             }
         }
     }
@@ -690,7 +782,7 @@ private fun StepBottomBar(
             }
             Spacer(Modifier.weight(1f))
             BarKey(
-                icon = if (isLast) Icons.Rounded.Check else Icons.AutoMirrored.Rounded.ArrowForward,
+                icon = if (isLast) Icons.Rounded.Check else Icons.Rounded.ChevronRight,
                 label = if (isLast) "完成" else "下一步",
                 enabled = canNext,
                 primary = true,
@@ -1126,48 +1218,4 @@ private fun FinishedView(
             }
         }
     }
-}
-
-/** 正在读的时候想调字号，不该被赶回设置页。 */
-@Composable
-private fun FontDialog(
-    scale: Float,
-    onChange: (Float) -> Unit,
-    onCommit: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val skin = LocalSkin.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = skin.surface,
-        shape = RoundedCornerShape(skin.radiusCard),
-        title = {
-            Text("字号", fontSize = skin.fs(15.5f), fontWeight = FontWeight.Medium, color = skin.text)
-        },
-        text = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("A", fontSize = skin.fs(12f), color = skin.sub)
-                Slider(
-                    value = scale,
-                    onValueChange = onChange,
-                    onValueChangeFinished = onCommit,
-                    valueRange = 0.9f..1.4f,
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 10.dp),
-                )
-                Text("A", fontSize = skin.fs(22f), color = skin.sub)
-            }
-        },
-        confirmButton = {
-            Text(
-                "好",
-                fontSize = skin.fs(12.5f),
-                color = skin.accent,
-                modifier = Modifier
-                    .clickable(onClick = onDismiss)
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-            )
-        },
-    )
 }

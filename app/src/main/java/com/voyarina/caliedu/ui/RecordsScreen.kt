@@ -813,7 +813,7 @@ private fun RecordCard(
                 .height(3.dp)
                 .background(skin.line, CircleShape)
         ) {
-            val ratio = if (record.finished) 1f else record.ratio
+            val ratio = record.ratio
             if (ratio > 0f) {
                 Box(
                     Modifier

@@ -35,11 +35,17 @@ data class LessonRecord(
     val passed: List<Int> = emptyList(),
 ) {
     val total: Int get() = plan.steps.size
+
+    /**
+     * 读到哪了。
+     *
+     * 只看游标，不看过了几关：过了 20 步但最后停在第 8 步，进度条应该停在第 8 步，
+     * 那才是「你在哪」。「已过几步」是成绩，不是位置。
+     */
     val ratio: Float get() = when {
         total <= 0 -> 0f
-        passed.isNotEmpty() -> passed.size.toFloat() / total
-        else -> cursor.toFloat() / total
-    }.coerceIn(0f, 1f)
+        else -> ((cursor + 1).toFloat() / total).coerceIn(0f, 1f)
+    }
     val headline: String get() = title.ifBlank { plan.title.ifBlank { "未命名" } }
 }
 
