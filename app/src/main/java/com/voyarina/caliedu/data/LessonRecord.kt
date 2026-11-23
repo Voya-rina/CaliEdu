@@ -33,6 +33,10 @@ data class LessonRecord(
      * 第 4~10 步全都要重答一遍。旧记录这个字段是空的，打开时按 cursor 补一次。
      */
     val passed: List<Int> = emptyList(),
+    /** 上次退出时是不是停在通读。下次打开接上，不用每次重新切。 */
+    val reading: Boolean = false,
+    /** 通读读到第几节（从 0 起）；-1 表示没通读过。和做题游标分开，互不覆盖。 */
+    val readingAt: Int = -1,
 ) {
     val total: Int get() = plan.steps.size
 

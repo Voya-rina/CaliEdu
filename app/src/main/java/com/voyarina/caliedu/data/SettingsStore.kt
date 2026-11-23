@@ -72,6 +72,7 @@ class SettingsStore(private val context: Context) {
     private val keyTheme = stringPreferencesKey("theme_mode")
     private val keyScale = floatPreferencesKey("text_scale")
     private val keyLibrary = stringPreferencesKey("pdf_library")
+    private val keyReadingBar = booleanPreferencesKey("reading_toggle_bar")
 
     /** 解一次密要进 Keystore，而 DataStore 每次改风格/字号都会重新发一遍，缓存住省这趟。 */
     private var sealed: String? = null
@@ -102,6 +103,8 @@ class SettingsStore(private val context: Context) {
     val themeFlow: Flow<ThemeMode> = context.dataStore.data.map { p -> ThemeMode.of(p[keyTheme]) }
 
     val scaleFlow: Flow<Float> = context.dataStore.data.map { p -> (p[keyScale] ?: 1f).coerceIn(0.9f, 1.4f) }
+
+    val readingBarFlow: Flow<Boolean> = context.dataStore.data.map { p -> p[keyReadingBar] ?: false }
 
     val libraryFlow: Flow<PdfLibrary> = context.dataStore.data.map { p ->
         val raw = p[keyLibrary]
@@ -137,6 +140,10 @@ class SettingsStore(private val context: Context) {
 
     suspend fun saveScale(scale: Float) {
         context.dataStore.edit { p -> p[keyScale] = scale }
+    }
+
+    suspend fun saveReadingBar(on: Boolean) {
+        context.dataStore.edit { p -> p[keyReadingBar] = on }
     }
 
     suspend fun saveLibrary(library: PdfLibrary) {

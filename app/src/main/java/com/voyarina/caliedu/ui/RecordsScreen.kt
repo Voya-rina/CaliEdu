@@ -40,7 +40,6 @@ import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Sell
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -62,7 +61,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.voyarina.caliedu.core.Category
-import com.voyarina.caliedu.core.Subject
 import com.voyarina.caliedu.core.Track
 import com.voyarina.caliedu.data.LessonRecord
 import com.voyarina.caliedu.data.Mistake
@@ -393,7 +391,7 @@ fun RecordsScreen(
     }
 
     pendingCategory?.let { record ->
-        CategoryDialog(
+        CategoryPickerDialog(
             current = Category.majorOf(record.plan),
             onPick = { major ->
                 pendingCategory = null
@@ -951,60 +949,8 @@ private fun MistakeCard(
 }
 
 /**
- * 改分类。只改标签，不动进度和错题——
- * 分类是给自己整理用的，删掉重来才是破坏性的。
+ * 记录列表按一级分类筛。旧记录的 tags 可能是空的，Category 会兜一层。
  */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun CategoryDialog(current: String, onPick: (String) -> Unit, onDismiss: () -> Unit) {
-    val skin = LocalSkin.current
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = skin.surface,
-        shape = RoundedCornerShape(skin.radiusCard),
-        title = {
-            Column {
-                Text("归到哪一类", fontSize = skin.fs(15.5f), fontWeight = FontWeight.Medium, color = skin.text)
-                Spacer(Modifier.height(3.dp))
-                Text("只改标签，不动已经走过的进度", fontSize = skin.fs(11f), color = skin.sub)
-            }
-        },
-        text = {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp),
-            ) {
-                Subject.ALL.forEach { name ->
-                    val active = name == current
-                    Text(
-                        name,
-                        fontSize = skin.fs(12f),
-                        color = if (active) skin.onAccent else skin.text,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(100.dp))
-                            .background(if (active) skin.accent else skin.codeBg)
-                            .clickable { onPick(name) }
-                            .padding(horizontal = 11.dp, vertical = 7.dp),
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Box(
-                Modifier
-                    .height(skin.ui(36f))
-                    .clip(RoundedCornerShape(100.dp))
-                    .background(skin.codeBg)
-                    .clickable(onClick = onDismiss)
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("取消", fontSize = skin.fs(12.5f), fontWeight = FontWeight.Medium, color = skin.text)
-            }
-        },
-    )
-}
-
 private fun inCategory(record: LessonRecord, filter: String): Boolean =
     filter.isBlank() || Category.tagsOf(record.plan).contains(filter)
 

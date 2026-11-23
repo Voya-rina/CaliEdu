@@ -17,17 +17,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voyarina.caliedu.UiState
+import com.voyarina.caliedu.core.Category
 
 /**
  * 步骤目录。长课听到一半想跳回去看某一节，比一路点「下一步」现实得多。
@@ -39,11 +48,13 @@ fun StepDirectorySheet(
     state: UiState,
     currentIndex: Int = state.progress.idx,
     onPick: (Int) -> Unit,
+    onRecategorize: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val skin = LocalSkin.current
     val plan = state.plan ?: return
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var pickCategory by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -61,7 +72,32 @@ fun StepDirectorySheet(
         },
     ) {
         Column(Modifier.padding(horizontal = 20.dp)) {
-            Text("目录", fontSize = skin.stepTitleSize * 0.9f, fontWeight = FontWeight.Bold, color = skin.text)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("目录", fontSize = skin.stepTitleSize * 0.9f, fontWeight = FontWeight.Bold, color = skin.text)
+                Spacer(Modifier.weight(1f))
+                // 自动分类只看题面，猜错很常见；改的地方就放在这里，看目录时顺手能改。
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(100.dp))
+                        .background(skin.codeBg)
+                        .clickable { pickCategory = true }
+                        .padding(start = 11.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        Category.majorOf(plan),
+                        fontSize = skin.fs(11.5f),
+                        color = skin.accentDeep,
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Icon(
+                        Icons.Rounded.ExpandMore,
+                        contentDescription = "改分类",
+                        tint = skin.accentDeep.copy(alpha = 0.6f),
+                        modifier = Modifier.size(13.dp),
+                    )
+                }
+            }
             Spacer(Modifier.height(10.dp))
 
             LazyColumn(
@@ -129,5 +165,16 @@ fun StepDirectorySheet(
                 item { Spacer(Modifier.height(24.dp)) }
             }
         }
+    }
+
+    if (pickCategory) {
+        CategoryPickerDialog(
+            current = Category.majorOf(plan),
+            onPick = { major ->
+                pickCategory = false
+                onRecategorize(major)
+            },
+            onDismiss = { pickCategory = false },
+        )
     }
 }

@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.Check
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Functions
 import androidx.compose.material.icons.rounded.Lightbulb
@@ -56,6 +58,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +85,9 @@ import com.voyarina.caliedu.data.ChannelMode
 import com.voyarina.caliedu.model.Choice
 import com.voyarina.caliedu.model.StepContent
 import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -111,6 +117,8 @@ fun LessonScreen(
     onAskSend: () -> Unit,
     onScale: (Float) -> Unit,
     onScaleCommit: () -> Unit,
+    onReadAt: (Int) -> Unit,
+    onRecategorize: (String) -> Unit,
 ) {
     val skin = LocalSkin.current
     val plan = state.plan ?: return
@@ -140,6 +148,29 @@ fun LessonScreen(
     // 首项是知识点那行，节号 = 首项 - 1。不读的时候这个值恒为 0，没人用。
     val readingIndex = (readingList.firstVisibleItemIndex - 1)
         .coerceIn(0, maxOf(0, plan.steps.lastIndex))
+
+    // 退出重进要接着上次读的地方。
+    LaunchedEffect(state.recordId, state.reading) {
+        if (!state.reading || state.readingAt < 0) return@LaunchedEffect
+        runCatching { readingList.scrollToItem((state.readingAt + 1).coerceIn(0, plan.steps.size)) }
+    }
+
+    // 滚到哪记到哪。500ms 没有新的滚动才写一次，翻十节只落一次盘。
+    LaunchedEffect(state.reading, state.recordId) {
+        if (!state.reading) return@LaunchedEffect
+        var seeded = false
+        snapshotFlow { readingList.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .collectLatest { raw ->
+                // 首帧是恢复滚动之前的 0，不能拿它把记录抹成第 1 节。
+                if (!seeded) {
+                    seeded = true
+                    return@collectLatest
+                }
+                delay(500)
+                onReadAt((raw - 1).coerceIn(0, maxOf(0, plan.steps.lastIndex)))
+            }
+    }
 
     fun slideTo(target: Float, spec: AnimationSpec<Float>) {
         // 拖动中途要能打断上一段动画，animateTo 天然会取消前一段。
@@ -248,6 +279,16 @@ fun LessonScreen(
                         fontSize = skin.fs(11.5f),
                         letterSpacing = if (skin.chromeUppercase) 0.6.sp else 0.sp,
                         color = skin.sub,
+                    )
+                }
+            }
+            // 设置里能把它请到顶栏来：切通读本来是最常用的动作，不该每次进面板。
+            if (state.readingBar) {
+                IconButton(onClick = onToggleReading) {
+                    Icon(
+                        if (state.reading) Icons.Rounded.ViewAgenda else Icons.AutoMirrored.Rounded.MenuBook,
+                        contentDescription = if (state.reading) "回到单步" else "通读",
+                        tint = if (state.reading) skin.accent else skin.sub,
                     )
                 }
             }
@@ -415,6 +456,7 @@ fun LessonScreen(
                     onJump(index)
                 }
             },
+            onRecategorize = onRecategorize,
             onDismiss = { dirOpen = false },
         )
     }
@@ -828,7 +870,7 @@ private fun Segments(total: Int, current: Int, skin: Skin, onClick: () -> Unit) 
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 20.dp, vertical = 10.dp),
+            .padding(horizontal = 20.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (total <= 14) {
@@ -846,7 +888,7 @@ private fun Segments(total: Int, current: Int, skin: Skin, onClick: () -> Unit) 
                 }
             }
         } else {
-            // 二十几段细线并排就看不出进度了，退成一条连续进度 + 计数。
+            // 二十几段细线并排就看不出进度了，退成一条连续进度。
             Box(
                 Modifier
                     .weight(1f)
@@ -860,8 +902,6 @@ private fun Segments(total: Int, current: Int, skin: Skin, onClick: () -> Unit) 
                         .background(skin.accent, RoundedCornerShape(2.dp))
                 )
             }
-            Spacer(Modifier.width(10.dp))
-            Text("${current + 1}/$total", fontSize = skin.fs(10.5f), color = skin.sub)
         }
     }
 }

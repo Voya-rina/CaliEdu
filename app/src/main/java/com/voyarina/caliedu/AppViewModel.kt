@@ -127,6 +127,10 @@ data class UiState(
     val grading: Boolean = false,
     val waitingStep: Int = -1,
     val reading: Boolean = false,
+    /** 通读读到第几节（从 0 起）；-1 表示这节课还没通读过。 */
+    val readingAt: Int = -1,
+    /** 顶栏要不要直接放一个通读/单步切换：默认收在齿轮里。 */
+    val readingBar: Boolean = false,
     val toast: String? = null,
     val solved: Int = 0,
     val wrongs: Int = 0,
@@ -225,6 +229,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             store.scaleFlow.collect { saved -> state = state.copy(textScale = saved) }
         }
         viewModelScope.launch {
+            store.readingBarFlow.collect { saved -> state = state.copy(readingBar = saved) }
+        }
+        viewModelScope.launch {
             store.libraryFlow.collect { saved -> state = state.copy(library = saved) }
         }
         viewModelScope.launch {
@@ -254,6 +261,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun commitTextScale() {
         viewModelScope.launch { store.saveScale(state.textScale) }
+    }
+
+    fun setReadingBar(on: Boolean) {
+        state = state.copy(readingBar = on)
+        viewModelScope.launch { store.saveReadingBar(on) }
     }
 
     /** 设置页改成边改边存，所以这里不跳页面。 */
@@ -343,7 +355,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             true
         }
 
-        Screen.STYLE, Screen.MODEL, Screen.LIBRARY -> {
+        Screen.STYLE, Screen.MODEL -> {
             state = state.copy(screen = Screen.SETTINGS)
             true
         }
@@ -359,7 +371,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             true
         }
 
-        Screen.RECORDS, Screen.SETTINGS -> {
+        Screen.RECORDS, Screen.SETTINGS, Screen.LIBRARY -> {
             state = state.copy(screen = Screen.HOME)
             true
         }
@@ -642,6 +654,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             finished = false,
             reviewing = false,
             reading = false,
+            readingAt = -1,
             recordId = record.id,
             lessonReturn = lessonReturnOf(),
             solved = 0,
@@ -712,6 +725,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             finished = false,
             reviewing = false,
             reading = false,
+            readingAt = -1,
             recordId = record.id,
             lessonReturn = lessonReturnOf(),
             solved = 0,
@@ -781,6 +795,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             draft = "",
             notes = "",
             finished = false,
+            readingAt = -1,
             reviewing = false,
             reading = false,
             recordId = record.id,
@@ -1141,6 +1156,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         state = state.copy(
             finished = false,
             reviewing = true,
+            // 回看是逐步翻题，不是接着读；上次停在通读也得回到单步。
+            reading = false,
             progress = Progress(idx = 0),
             passed = plan.steps.indices.toSet(),
             draft = "",
@@ -1221,7 +1238,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun toggleReading() {
-        state = state.copy(reading = !state.reading)
+        val next = !state.reading
+        // 第一次进通读就停在正在做的那一步；之后沿用上次读到的地方。
+        val at = if (next && state.readingAt < 0) state.progress.idx else state.readingAt
+        state = state.copy(reading = next, readingAt = at)
+        persist()
+    }
+
+    /** 通读滚到哪一节就记到哪一节。和做题游标分开，翻阅读不该改「你在第几步」。 */
+    fun noteReadingAt(index: Int) {
+        if (!state.reading) return
+        val total = state.plan?.steps?.size ?: return
+        if (total <= 0) return
+        val at = index.coerceIn(0, total - 1)
+        if (at == state.readingAt) return
+        state = state.copy(readingAt = at)
+        persist()
     }
 
     fun openPlay() {
@@ -1345,7 +1377,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             notes = "",
             finished = record.finished,
             reviewing = false,
-            reading = false,
+            // 上次退出时停在通读，这次进来就还在通读，而且翻回读到的那一节。
+            reading = record.reading,
+            readingAt = record.readingAt,
             recordId = record.id,
             lessonReturn = lessonReturnOf(),
             solved = record.solved,
@@ -1403,6 +1437,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 从错题本跳到某一课的具体一步。 */
     fun openAt(record: LessonRecord, step: Int) {
         openRecord(record)
+        // 从错题点进来是要看那道题，不是接着读——记录里的通读位置留着，但这一趟先回单步。
+        state = state.copy(reading = false)
         loadStep(step.coerceIn(0, maxOf(0, record.plan.steps.lastIndex)))
     }
 
@@ -1502,6 +1538,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             finished = finished,
             mistakes = state.mistakes,
             passed = state.passed.sorted(),
+            reading = state.reading,
+            readingAt = state.readingAt,
         )
         viewModelScope.launch {
             val evicted = lessons.save(record)

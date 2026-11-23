@@ -20,13 +20,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
-import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,9 +52,9 @@ fun SettingsHome(
     state: UiState,
     onStyle: () -> Unit,
     onModel: () -> Unit,
-    onLibrary: () -> Unit,
     onScale: (Float) -> Unit,
     onScaleCommit: () -> Unit,
+    onReadingBar: (Boolean) -> Unit,
 ) {
     val skin = LocalSkin.current
     // 版本号从安装包读，不认 BuildConfig：包名改过一次，编译期常量会跟着变。
@@ -87,6 +89,13 @@ fun SettingsHome(
                 onChange = onScale,
                 onCommit = onScaleCommit,
             )
+            Spacer(Modifier.height(8.dp))
+            ToggleRow(
+                icon = Icons.AutoMirrored.Rounded.MenuBook,
+                title = "顶栏显示通读开关",
+                checked = state.readingBar,
+                onToggle = onReadingBar,
+            )
 
             Spacer(Modifier.height(20.dp))
             Group("模型")
@@ -101,20 +110,6 @@ fun SettingsHome(
                 },
                 accent = state.settings.canTalk,
                 onClick = onModel,
-            )
-
-            Spacer(Modifier.height(20.dp))
-            Group("资料")
-            SettingRow(
-                icon = Icons.Rounded.FolderOpen,
-                title = "资料",
-                trailing = when {
-                    state.libraryBusy -> "读取中…"
-                    state.library.hasAny -> "${state.library.visibleItems.size} 个"
-                    else -> "未选择"
-                },
-                accent = state.library.hasAny,
-                onClick = onLibrary,
             )
 
             Spacer(Modifier.height(20.dp))
@@ -185,8 +180,41 @@ private fun SettingRow(
     }
 }
 
-/** 字号放在设置首页直接拖，拖完松手才写盘。 */
 @Composable
+private fun ToggleRow(
+    icon: ImageVector,
+    title: String,
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    val skin = LocalSkin.current
+    val shape = RoundedCornerShape(skin.radiusCard)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(skin.surface, shape)
+            .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp, skin.line, shape)
+            .clickable { onToggle(!checked) }
+            .padding(horizontal = 15.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = skin.accent, modifier = Modifier.size(19.dp))
+        Spacer(Modifier.width(13.dp))
+        Text(title, fontSize = skin.bodySize, color = skin.text, modifier = Modifier.weight(1f))
+        Switch(
+            checked = checked,
+            onCheckedChange = onToggle,
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = skin.onAccent,
+                checkedTrackColor = skin.accent,
+                uncheckedThumbColor = skin.sub,
+                uncheckedTrackColor = skin.codeBg,
+            ),
+        )
+    }
+}
+
+/** 字号放在设置首页直接拖，拖完松手才写盘。 */@Composable
 private fun ScaleCard(scale: Float, onChange: (Float) -> Unit, onCommit: () -> Unit) {
     val skin = LocalSkin.current
     val shape = RoundedCornerShape(skin.radiusCard)

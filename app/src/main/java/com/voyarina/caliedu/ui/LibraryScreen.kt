@@ -57,7 +57,6 @@ fun LibraryScreen(
     onDoc: (PdfItem) -> Unit,
     onRemove: (PdfItem) -> Unit,
     onToast: (String) -> Unit,
-    onBack: () -> Unit,
 ) {
     val skin = LocalSkin.current
     val context = LocalContext.current
@@ -78,14 +77,14 @@ fun LibraryScreen(
             .background(skin.bg)
             .padding(horizontal = 22.dp)
     ) {
-        Spacer(Modifier.height(10.dp))
-        PageHeader("资料", onBack)
+        Spacer(Modifier.height(14.dp))
+        Text("资料", fontSize = skin.fs(20f), fontWeight = FontWeight.Bold, color = skin.text)
         Text(
             "文件夹和单个文件都在这里。md 按章切节当讲义读，也能拆成题目。",
             fontSize = skin.fs(11.5f),
             lineHeight = skin.fs(18f),
             color = skin.sub,
-            modifier = Modifier.padding(start = 2.dp, top = 2.dp),
+            modifier = Modifier.padding(start = 2.dp, top = 4.dp),
         )
 
         Spacer(Modifier.height(16.dp))

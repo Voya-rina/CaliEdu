@@ -32,6 +32,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.Icon
@@ -42,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -96,7 +98,8 @@ fun CaliEduApp(
     }
     CaliTheme(state.style, dark, state.textScale) {
         val skin = LocalSkin.current
-        val docked = state.screen == Screen.HOME || state.screen == Screen.RECORDS || state.screen == Screen.SETTINGS
+        val docked = state.screen == Screen.HOME || state.screen == Screen.RECORDS ||
+            state.screen == Screen.LIBRARY || state.screen == Screen.SETTINGS
         val relay = state.relay
 
         // 加载浮层盖着的时候，返回键先当作「取消」——否则会直接把 App 退掉，
@@ -171,9 +174,9 @@ fun CaliEduApp(
                             state = state,
                             onStyle = { vm.go(Screen.STYLE) },
                             onModel = { vm.go(Screen.MODEL) },
-                            onLibrary = { vm.go(Screen.LIBRARY) },
                             onScale = vm::setTextScale,
                             onScaleCommit = vm::commitTextScale,
+                            onReadingBar = vm::setReadingBar,
                         )
 
                         Screen.STYLE -> StyleScreen(
@@ -201,7 +204,6 @@ fun CaliEduApp(
                             onDoc = vm::openAsDoc,
                             onRemove = vm::removeFile,
                             onToast = vm::toast,
-                            onBack = { vm.back() },
                         )
 
                         Screen.LESSON -> LessonScreen(
@@ -224,6 +226,8 @@ fun CaliEduApp(
                             onAskSend = { vm.ask(state.askInput) },
                             onScale = vm::setTextScale,
                             onScaleCommit = vm::commitTextScale,
+                            onReadAt = vm::noteReadingAt,
+                            onRecategorize = { major -> vm.setCategory(state.recordId, major) },
                             onGenerate = vm::ensureStep,
                             onFocusStep = { index ->
                                 vm.toggleReading()
@@ -292,8 +296,8 @@ fun CaliEduApp(
 
 /** 页面层级：同级淡入淡出，跨级左右滑。 */
 private fun depthOf(screen: Screen): Int = when (screen) {
-    Screen.HOME, Screen.RECORDS, Screen.SETTINGS -> 0
-    Screen.STYLE, Screen.MODEL, Screen.LIBRARY, Screen.REVIEW -> 1
+    Screen.HOME, Screen.RECORDS, Screen.LIBRARY, Screen.SETTINGS -> 0
+    Screen.STYLE, Screen.MODEL, Screen.REVIEW -> 1
     Screen.LESSON, Screen.PLAY -> 2
 }
 
@@ -305,10 +309,13 @@ private fun copyToClipboard(context: Context, text: String) {
 @Composable
 private fun Dock(current: Screen, onSelect: (Screen) -> Unit) {
     val skin = LocalSkin.current
-    val items: List<Pair<Screen, Pair<ImageVector, String>>> = listOf(
-        Screen.HOME to (Icons.Rounded.Home to "首页"),
-        Screen.RECORDS to (Icons.Rounded.AutoStories to "记录"),
-        Screen.SETTINGS to (Icons.Rounded.Settings to "设置"),
+    // 只留图标：标题栏已经写着你在哪一页，这里再来四个字是重复。
+    // label 只给读屏用，不画出来。
+    val items: List<Triple<Screen, ImageVector, String>> = listOf(
+        Triple(Screen.HOME, Icons.Rounded.Home, "首页"),
+        Triple(Screen.RECORDS, Icons.Rounded.AutoStories, "记录"),
+        Triple(Screen.LIBRARY, Icons.Rounded.FolderOpen, "资料"),
+        Triple(Screen.SETTINGS, Icons.Rounded.Settings, "设置"),
     )
     Column {
         if (skin.style == UiStyle.PRINT) {
@@ -322,48 +329,55 @@ private fun Dock(current: Screen, onSelect: (Screen) -> Unit) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(vertical = 6.dp),
+                .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            items.forEach { entry ->
-                val screen = entry.first
-                val icon = entry.second.first
-                val label = entry.second.second
+            items.forEach { (screen, icon, label) ->
                 val selected = screen == current
                 val lift by androidx.compose.animation.core.animateFloatAsState(
                     targetValue = if (selected) 1f else 0f,
                     animationSpec = androidx.compose.animation.core.tween(180),
                     label = "dock",
                 )
-                Column(
+                Box(
                     Modifier
                         .weight(1f)
-                        .clickable { onSelect(screen) }
-                        .padding(vertical = 5.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                        .height(48.dp)
+                        .clickable { onSelect(screen) },
+                    contentAlignment = Alignment.Center,
                 ) {
-                    when {
-                        skin.style == UiStyle.MATERIAL && selected -> Box(
+                    if (skin.style == UiStyle.MATERIAL) {
+                        Box(
                             Modifier
-                                .background(skin.accentSoft, CircleShape)
-                                .padding(horizontal = 17.dp, vertical = 3.dp)
+                                .background(
+                                    if (selected) skin.accentSoft else Color.Transparent,
+                                    CircleShape,
+                                )
+                                .padding(horizontal = 18.dp, vertical = 5.dp)
                         ) {
-                            Icon(icon, contentDescription = null, tint = skin.accentDeep, modifier = Modifier.size(skin.ui(20f)))
+                            Icon(
+                                icon,
+                                contentDescription = label,
+                                tint = if (selected) skin.accentDeep else skin.sub,
+                                modifier = Modifier.size(skin.ui(21f)),
+                            )
                         }
-
-                        skin.style == UiStyle.MATERIAL -> Box(Modifier.padding(vertical = 3.dp)) {
-                            Icon(icon, contentDescription = null, tint = skin.sub, modifier = Modifier.size(skin.ui(20f)))
+                    } else {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                icon,
+                                contentDescription = label,
+                                tint = if (selected) skin.accent else skin.sub,
+                                modifier = Modifier.size(skin.ui(21f + lift * 2f)),
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Box(
+                                Modifier
+                                    .size(4.dp)
+                                    .background(if (selected) skin.accent else Color.Transparent, CircleShape)
+                            )
                         }
-
-                        else -> Icon(
-                            icon,
-                            contentDescription = null,
-                            tint = if (selected) skin.accent else skin.sub,
-                            modifier = Modifier.size(skin.ui(20f + lift * 2f)),
-                        )
                     }
-                    Spacer(Modifier.height(3.dp))
-                    Text(label, fontSize = skin.fs(10.5f), color = if (selected) skin.accent else skin.sub)
                 }
             }
         }

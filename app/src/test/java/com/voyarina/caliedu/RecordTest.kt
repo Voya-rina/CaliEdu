@@ -3,7 +3,10 @@ package com.voyarina.caliedu
 import com.voyarina.caliedu.data.LessonRecord
 import com.voyarina.caliedu.model.LessonPlan
 import com.voyarina.caliedu.model.StepBrief
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -45,5 +48,28 @@ class RecordTest {
     fun ratioStaysInRange() {
         assertEquals(1f, record(cursor = 99).ratio, 0.001f)
         assertEquals(0f, LessonRecord().ratio, 0.001f)
+    }
+
+    @Test
+    fun readingStateSurvivesJson() {
+        val saved = record(cursor = 3).copy(reading = true, readingAt = 7)
+        val text = Json.encodeToString(LessonRecord.serializer(), saved)
+        val back = Json.decodeFromString(LessonRecord.serializer(), text)
+        assertTrue("上次停在通读，退出重进要还在通读", back.reading)
+        assertEquals("读到第 8 节（从 0 起是 7）", 7, back.readingAt)
+    }
+
+    @Test
+    fun oldRecordsOpenInStepMode() {
+        // 加字段之前存下的记录：没有 reading / readingAt，不能被当成「读到第 1 节」。
+        val back = Json.decodeFromString(LessonRecord.serializer(), """{"id":"x","cursor":2}""")
+        assertFalse(back.reading)
+        assertEquals(-1, back.readingAt)
+    }
+
+    @Test
+    fun readingPositionDoesNotMoveTheBar() {
+        // 通读翻到第 10 节，但做题游标还在第 4 步：记录卡的条仍指第 4 步。
+        assertEquals(0.4f, record(cursor = 3).copy(reading = true, readingAt = 9).ratio, 0.001f)
     }
 }
