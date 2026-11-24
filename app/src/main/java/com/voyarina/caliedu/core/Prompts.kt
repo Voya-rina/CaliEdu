@@ -524,4 +524,37 @@ $schema
 
     fun repairUser(raw: String): String =
         "上一次的输出（可能被截断或缺字段）：\n<<<\n" + raw.take(4000) + "\n>>>"
+
+    // ------------------------------------------------------------------ 问答出题
+
+    /**
+     * 讲义里的问答已经有正确答案，模型只需要补干扰项。
+     *
+     * 不让它重写问题和答案：原文是作者写的，比模型改写的准；
+     * 而且一次只给几道题、每道只给 300 字，省 token 也不容易跑偏。
+     */
+    fun quizSystem(): String = """
+你在给一份讲义里的问答出干扰项。每道题都已经有正确答案。
+
+每个错误选项要满足：
+1. 8~30 字，长度和正确答案接近，不要一眼就看出来是废话。
+2. 错得真实：混淆相邻概念、把必要条件说成充分条件、少一个限定词、因果倒置、
+   或者只对了前半句。
+3. 不许出现「以上都不对」「不确定」「视情况而定」这类废选项。
+4. 不要照抄正确答案，也不要把正确答案换个说法当成干扰项。
+
+每道题恰好 3 个错误选项。只输出 JSON，不要解释，不要 markdown 围栏：
+
+{"items":[{"n":1,"options":["错误选项1","错误选项2","错误选项3"]}]}
+""".trim()
+
+    fun quizUser(title: String, items: List<Pair<Int, Qa>>): String = buildString {
+        append("讲义：").append(title)
+        append("\n下面这些题只补干扰项，n 与题号一致。\n")
+        items.forEach { (n, qa) ->
+            append("\n").append(n).append(". 问：").append(qa.question.trim()).append('\n')
+            append("   答：").append(qa.answer.trim().take(300)).append('\n')
+        }
+        append("\n只输出这 ").append(items.size).append(" 道题。")
+    }
 }

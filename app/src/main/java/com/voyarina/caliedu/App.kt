@@ -152,7 +152,8 @@ fun CaliEduApp(
                         )
 
                         Screen.RECORDS -> RecordsScreen(
-                            records = state.records,
+                            // 讲义归资料页：记录是做题的地方，混着几十节只读内容会让统计和筛选失真。
+                            records = state.records.filterNot { it.isDoc },
                             tab = state.recordsTab,
                             filter = state.recordsFilter,
                             onTab = vm::setRecordsTab,
@@ -196,12 +197,16 @@ fun CaliEduApp(
 
                         Screen.LIBRARY -> LibraryScreen(
                             library = state.library,
+                            docs = state.records.filter { it.isDoc }.sortedByDescending { it.updatedAt },
                             busy = state.libraryBusy,
                             onImport = vm::importFolder,
                             onAddFiles = vm::addFiles,
                             onRescan = vm::rescanFolder,
                             onUse = { item, start, pages -> vm.useFile(item, start, pages) },
                             onDoc = vm::openAsDoc,
+                            onQuiz = vm::quizFromDoc,
+                            onOpenDoc = vm::openRecord,
+                            onDeleteDoc = { vm.deleteRecord(it.id) },
                             onRemove = vm::removeFile,
                             onToast = vm::toast,
                         )

@@ -45,6 +45,8 @@ sealed class MdNode {
     data class Quote(val text: String) : MdNode()
     data class Table(val head: List<String>, val rows: List<List<String>>) : MdNode()
     data class Math(val tex: String) : MdNode()
+    /** 讲义里的「Q: … A: …」：问题照常读，答案先遮住。 */
+    data class Quiz(val question: String, val answer: String) : MdNode()
     data object Rule : MdNode()
 }
 
@@ -166,6 +168,45 @@ fun parseMarkdown(source: String): List<MdNode> {
         }
     }
     flush()
+    return mergeQuiz(out)
+}
+
+/**
+ * 把「Q: … A: …」从普通段落里提出来。
+ *
+ * 两种写法都要认：同一段里一句 Q 一句 A，以及中间空了一行、Q 和 A 各成一段。
+ * 弄错的代价是整段问答按正文排出来，答案直接摊在眼前。
+ */
+private fun mergeQuiz(nodes: List<MdNode>): List<MdNode> {
+    val out = mutableListOf<MdNode>()
+    var i = 0
+    while (i < nodes.size) {
+        val node = nodes[i]
+        if (node is MdNode.Para) {
+            val same = com.voyarina.caliedu.core.QaParser.split(node.text)
+            if (same != null) {
+                out += MdNode.Quiz(same.question, same.answer)
+                i++
+                continue
+            }
+            val question = com.voyarina.caliedu.core.QaParser.questionOf(node.text)
+            if (question != null && i + 1 < nodes.size) {
+                val next = nodes[i + 1]
+                val answer = if (next is MdNode.Para) {
+                    com.voyarina.caliedu.core.QaParser.answerOf(next.text)
+                } else {
+                    null
+                }
+                if (answer != null) {
+                    out += MdNode.Quiz(question, answer)
+                    i += 2
+                    continue
+                }
+            }
+        }
+        out += node
+        i++
+    }
     return out
 }
 
@@ -380,6 +421,8 @@ fun Markdown(source: String, modifier: Modifier = Modifier) {
                         textAlign = if (skin.justify) TextAlign.Justify else TextAlign.Start,
                     )
                 }
+
+                is MdNode.Quiz -> QuizCard(node, skin)
 
                 is MdNode.Bullet -> Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     node.items.forEach { item ->
@@ -604,4 +647,55 @@ private fun Cell(text: String, header: Boolean, width: Dp, skin: Skin) {
             .padding(horizontal = 8.dp),
         textAlign = TextAlign.Start,
     )
+}
+
+/**
+ * 问答卡：问题照常读，答案默认折起来。
+ *
+ * 读教材时先自己回想一遍，再点开对照，这部分内容才真正过脑子；
+ * 一上来就把答案排在问题下面，眼睛会直接跳到答案。
+ */
+@Composable
+private fun QuizCard(node: MdNode.Quiz, skin: Skin) {
+    var open by remember(node.answer) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Row(verticalAlignment = Alignment.Top) {
+            Text(
+                "Q",
+                fontSize = skin.fs(10.5f),
+                fontWeight = FontWeight.Bold,
+                color = skin.accent,
+                modifier = Modifier.padding(top = 4.dp, end = 8.dp),
+            )
+            Text(
+                text = inlineMarkdown(node.question, skin),
+                fontSize = skin.bodySize,
+                lineHeight = skin.bodyLine,
+                color = skin.text,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(
+                    if (open) skin.amberSoft else skin.codeBg,
+                    RoundedCornerShape(skin.radiusChoice),
+                )
+                .clickable { open = !open }
+                .padding(horizontal = 13.dp, vertical = 10.dp)
+        ) {
+            if (open) {
+                Text(
+                    text = inlineMarkdown(node.answer, skin),
+                    fontSize = skin.bodySize * 0.97f,
+                    lineHeight = skin.bodyLine,
+                    color = skin.text,
+                )
+            } else {
+                Text("答案已遮住 · 点一下对照", fontSize = skin.fs(11.5f), color = skin.sub)
+            }
+        }
+    }
 }

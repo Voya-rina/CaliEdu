@@ -2,6 +2,7 @@ package com.voyarina.caliedu.llm
 
 import com.voyarina.caliedu.core.CodeDigest
 import com.voyarina.caliedu.core.Prompts
+import com.voyarina.caliedu.core.Qa
 import com.voyarina.caliedu.core.Track
 import com.voyarina.caliedu.core.Subject
 import com.voyarina.caliedu.core.TrackDetector
@@ -281,6 +282,66 @@ class LessonGenerator(
      * 开放题的兜底批改。返回 null 表示这次不判（没网、解析失败），
      * 调用方应退回本地判定，不能因为批改失败就把学生卡住。
      */
+    /**
+     * 给讲义里已有的问答补干扰项。
+     *
+     * 一个问题最多带 300 字答案进 prompt：干扰项只需要理解题意，不需要读完答案全文。
+     * 一批 6 题，既控制单次输出长度，也让编号不至于太容易错位。
+     */
+    suspend fun quizOptions(
+        settings: LlmSettings,
+        title: String,
+        items: List<Pair<Int, Qa>>,
+    ): Map<Int, List<String>> {
+        if (items.isEmpty() || !settings.canTalk) return emptyMap()
+        val out = mutableMapOf<Int, List<String>>()
+        items.chunked(6).forEach { batch ->
+            val raw = runCatching {
+                channelOf(settings).complete(
+                    Prompts.quizSystem(),
+                    Prompts.quizUser(title, batch),
+                    json = true,
+                    label = "补干扰项（${batch.size} 题）",
+                )
+            }.getOrNull() ?: return@forEach
+            out += parseOptions(raw, batch.map { it.first })
+        }
+        return out
+    }
+
+    /** 按题号对号入座；模型写成 1..n 的局部编号时，按出现顺序补空位。 */
+    internal fun parseOptions(raw: String, numbers: List<Int>): Map<Int, List<String>> {
+        val text = JsonRepair.extract(raw) ?: return emptyMap()
+        val root = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return emptyMap()
+        val array = when (root) {
+            is JsonArray -> root
+            is JsonObject -> root["items"] as? JsonArray ?: return emptyMap()
+            else -> return emptyMap()
+        }
+        val parsed = array.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val n = (obj["n"] as? JsonPrimitive)?.content?.toIntOrNull()
+            val options = (obj["options"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.content?.trim() }
+                ?.filter { it.isNotEmpty() }
+                ?: return@mapNotNull null
+            if (options.isEmpty()) null else n to options.take(3)
+        }
+        if (parsed.isEmpty()) return emptyMap()
+
+        val slots = mutableMapOf<Int, List<String>>()
+        val leftovers = mutableListOf<List<String>>()
+        parsed.forEach { (n, options) ->
+            if (n != null && n in numbers && n !in slots) slots[n] = options else leftovers += options
+        }
+        var cursor = 0
+        leftovers.forEach { options ->
+            while (cursor < numbers.size && numbers[cursor] in slots) cursor++
+            if (cursor < numbers.size) slots[numbers[cursor]] = options
+        }
+        return slots
+    }
+
     suspend fun grade(
         settings: LlmSettings,
         brief: StepBrief,

@@ -380,7 +380,10 @@ private fun RecentRow(record: LessonRecord, highlighted: Boolean, onClick: () ->
             )
             Text(
                 buildString {
-                    append(if (record.finished) "已走完" else "第 ${record.cursor + 1} / ${record.total} 步")
+                    append(
+                        if (record.finished) "已走完"
+                        else "第 ${record.cursor + 1} / ${record.total} ${if (record.isDoc) "节" else "步"}"
+                    )
                     append(" · ").append(Category.majorOf(record.plan))
                 },
                 fontSize = skin.fs(10.5f),

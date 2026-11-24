@@ -41,6 +41,16 @@ data class LessonRecord(
     val total: Int get() = plan.steps.size
 
     /**
+     * 讲义型：没有提问，正文来自 md 原文。
+     *
+     * 这类记录归「资料」页，不进「记录」——后者是做题的地方，
+     * 混着几十节只读的讲义，筛选和统计都会失真。
+     */
+    val isDoc: Boolean
+        get() = source.isNotBlank() && plan.steps.isNotEmpty() &&
+            plan.steps.all { it.judgeKind == "none" }
+
+    /**
      * 读到哪了。
      *
      * 只看游标，不看过了几关：过了 20 步但最后停在第 8 步，进度条应该停在第 8 步，

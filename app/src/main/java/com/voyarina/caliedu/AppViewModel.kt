@@ -16,8 +16,11 @@ import com.voyarina.caliedu.core.LessonDoc
 import com.voyarina.caliedu.core.MdLesson
 import com.voyarina.caliedu.core.Category
 import com.voyarina.caliedu.core.Progress
+import com.voyarina.caliedu.core.Qa
+import com.voyarina.caliedu.core.QaParser
 import com.voyarina.caliedu.core.Subject
 import com.voyarina.caliedu.core.Track
+import com.voyarina.caliedu.core.TrackDetector
 import com.voyarina.caliedu.core.Verdict
 import com.voyarina.caliedu.data.ChannelMode
 import com.voyarina.caliedu.data.LessonRecord
@@ -37,7 +40,11 @@ import com.voyarina.caliedu.data.withoutMistakes
 import com.voyarina.caliedu.llm.ChatException
 import com.voyarina.caliedu.llm.LessonGenerator
 import com.voyarina.caliedu.llm.RelayBroker
+import com.voyarina.caliedu.model.Block
+import com.voyarina.caliedu.model.Choice
 import com.voyarina.caliedu.model.LessonPlan
+import com.voyarina.caliedu.model.Question
+import com.voyarina.caliedu.model.StepBrief
 import com.voyarina.caliedu.model.StepContent
 import com.voyarina.caliedu.sample.MathSample
 import com.voyarina.caliedu.sample.Sample
@@ -70,6 +77,9 @@ private const val MAX_INPUT_CHARS = 20_000
 
 /** 开放题批改最多等这么久，超时就按本地判定走。 */
 private const val GRADE_TIMEOUT_MS = 45_000L
+
+/** 答案超过这个长度就不做成选择题了：选项装不下，判也判不准。 */
+private const val CHOICE_ANSWER_MAX = 320
 
 /** 接力模式一批写几步。再多，单次输出就容易在 4k token 处被截断。 */
 private const val RELAY_BATCH_STEPS = 6
@@ -118,6 +128,9 @@ data class UiState(
      * 也不能因为翻到某一步就把记录改回未完成。
      */
     val reviewing: Boolean = false,
+    /** 进回看之前停在哪一步、过了哪几步：回看翻页不该把这些推走，退出时按这个还原。 */
+    val reviewResume: Int = 0,
+    val reviewPassed: Set<Int> = emptySet(),
     val settings: LlmSettings = LlmSettings(),
     val style: UiStyle = UiStyle.PRINT,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -164,8 +177,15 @@ data class UiState(
     val brief get() = plan?.steps?.getOrNull(progress.idx)
     val content get() = brief?.let { contents[it.n] }
 
-    /** 讲义型课程：没有提问，只有正文。靠 judgeKind 认，重启后也认得出。 */
-    val isDoc: Boolean get() = plan?.steps?.firstOrNull()?.judgeKind == "none"
+    /**
+     * 讲义型课程：整门课都没有提问，只有正文。
+     *
+     * 必须同时满足「离线」——讲义的正文存在 source 里，contents 是不落盘的；
+     * 从问答生成的自测课也可能整门都是长答案节，但它的正文在 contents 里，
+     * 当成讲义就会在保存时被清空。
+     */
+    val isDoc: Boolean
+        get() = offline && plan?.steps?.let { steps -> steps.isNotEmpty() && steps.all { it.judgeKind == "none" } } ?: false
 
     /** 这一步能不能往下走：本步刚答对（或看过答案），或者这一课里它早就过了。 */
     val canAdvance: Boolean
@@ -211,9 +231,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         gradeWork = null
     }
 
-    /** 从记录页点进来的课，退出就该回记录页；其余都回首页。 */
-    private fun lessonReturnOf(): Screen =
-        if (state.screen == Screen.RECORDS) Screen.RECORDS else Screen.HOME
+    /** 从记录页点进来的课，退出就该回记录页；讲义回资料页；其余都回首页。 */
+    private fun lessonReturnOf(): Screen = when (state.screen) {
+        Screen.RECORDS -> Screen.RECORDS
+        Screen.LIBRARY -> Screen.LIBRARY
+        else -> Screen.HOME
+    }
 
     init {
         viewModelScope.launch {
@@ -329,6 +352,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             askWork = null
             broker.cancel()
             endLoading()
+            // 回看中直接退出：把游标和已过步数还原成进回看之前，别把「看了几页」当成绩写进记录。
+            if (state.reviewing) {
+                state = state.copy(
+                    progress = Progress(idx = state.reviewResume),
+                    passed = state.reviewPassed,
+                )
+            }
             persist()
             switchLesson()
             val backTo = state.lessonReturn
@@ -680,6 +710,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             openDoc(raw, "鲍鱼年龄预测 · 讲义")
+            // 讲义现在住在资料页：从记录页点「示例」打开，退出也该落到它该在的地方。
+            state = state.copy(lessonReturn = Screen.LIBRARY)
         }
     }
 
@@ -734,6 +766,155 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             passed = emptySet(),
         )
         saveRecord(record)
+    }
+
+    /**
+     * 从讲义里的 Q/A 直接出一套自测题。
+     *
+     * 问题和答案都是原文，模型只补干扰项——比让它重写一遍准，也省得多。
+     * 答案太长的问答不动它，原样留成阅读节；宁可少一道题，也不出一道判不准的题。
+     */
+    fun quizFromDoc(item: PdfItem) {
+        if (!state.settings.canTalk) {
+            toast("出题需要模型。先点「讲义」，问答会以遮罩形式让你自测。")
+            return
+        }
+        val ctx = getApplication<Application>()
+        state = state.copy(libraryBusy = true, error = null)
+        viewModelScope.launch {
+            val raw = withContext(Dispatchers.IO) { readText(ctx, Uri.parse(item.uri)) }
+            if (raw.isNullOrBlank()) {
+                state = state.copy(libraryBusy = false, error = "这个文件读不出内容。")
+                return@launch
+            }
+            val qas = withContext(Dispatchers.Default) { QaParser.parse(raw) }
+            if (qas.size < 2) {
+                state = state.copy(libraryBusy = false)
+                toast("没识别到成对的 Q/A（形如 Q: … A: …）")
+                return@launch
+            }
+            state = state.copy(libraryBusy = false)
+            beginLoading("正在给 ${qas.size} 道问答出选项")
+            try {
+                val settings = store.current()
+                val plan = quizPlan(item, raw, qas)
+                val asking = plan.steps.filter { it.judgeKind == "choice" }.map { it.n }
+                val pairs = qas.mapIndexed { index, qa -> (index + 1) to qa }
+                    .filter { it.first in asking }
+                val options = generator.quizOptions(settings, plan.title, pairs)
+                openQuiz(item, plan, qas, options)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail(e)
+            }
+        }
+    }
+
+    private fun quizPlan(item: PdfItem, raw: String, qas: List<Qa>): LessonPlan {
+        val name = item.name.substringBeforeLast('.').ifBlank { "问答自测" }
+        val track = TrackDetector.detect(raw)
+        return LessonPlan(
+            title = name.take(40),
+            kind = track.key,
+            oneLine = "${qas.size} 问",
+            tags = Subject.guess(raw, name)?.let { listOf(it) }
+                ?: Subject.normalize(emptyList(), track, name),
+            steps = qas.mapIndexed { index, qa ->
+                StepBrief(
+                    n = index + 1,
+                    title = qa.question.take(24),
+                    stage = "自测",
+                    goal = "",
+                    judgeKind = if (qa.answer.length <= CHOICE_ANSWER_MAX) "choice" else "none",
+                )
+            },
+            needsRun = false,
+        )
+    }
+
+    private fun openQuiz(
+        item: PdfItem,
+        plan: LessonPlan,
+        qas: List<Qa>,
+        options: Map<Int, List<String>>,
+    ) {
+        val contents = qas.mapIndexed { index, qa ->
+            val n = index + 1
+            val distractors = options[n].orEmpty()
+                .filter { Judge.normalize(it) != Judge.normalize(qa.answer) }
+                .distinctBy { Judge.normalize(it) }
+                .take(3)
+            if (distractors.isEmpty()) {
+                // 没拿到选项（长答案，或模型没吐回来）：当阅读节，不硬出题。
+                StepContent(
+                    n = n,
+                    blocks = listOf(Block("core", qa.answer)),
+                    question = Question(),
+                    hints = emptyList(),
+                    onCorrect = "",
+                    summary = emptyList(),
+                )
+            } else {
+                StepContent(
+                    n = n,
+                    blocks = emptyList(),
+                    question = Question(
+                        prompt = qa.question,
+                        kind = "choice",
+                        choices = buildChoices(qa.answer, distractors, n),
+                        answer = qa.answer,
+                    ),
+                    hints = emptyList(),
+                    // 答对之后才给完整答案，答题前它只藏在选项里。
+                    onCorrect = qa.answer,
+                    summary = emptyList(),
+                )
+            }
+        }.associateBy { it.n }
+
+        val now = System.currentTimeMillis()
+        val record = LessonRecord(
+            id = UUID.randomUUID().toString(),
+            title = plan.title,
+            oneLine = plan.oneLine,
+            offline = false,
+            createdAt = now,
+            updatedAt = now,
+            plan = plan,
+            contents = contents,
+        )
+        endLoading()
+        state = state.copy(
+            plan = plan,
+            contents = contents,
+            screen = Screen.LESSON,
+            offline = false,
+            progress = Progress(),
+            feedback = null,
+            draft = "",
+            notes = "",
+            finished = false,
+            reviewing = false,
+            reading = false,
+            readingAt = -1,
+            recordId = record.id,
+            lessonReturn = lessonReturnOf(),
+            solved = 0,
+            wrongs = 0,
+            mistakes = emptyList(),
+            passed = emptySet(),
+        )
+        saveRecord(record)
+        val reading = plan.steps.count { it.judgeKind == "none" }
+        if (reading > 0) toast("$reading 条答案太长，留成了阅读节")
+    }
+
+    /** 正确项轮换位置：全放第一个，用户闭眼都能答对。 */
+    private fun buildChoices(answer: String, distractors: List<String>, n: Int): List<Choice> {
+        val items = distractors.toMutableList()
+        items.add((n - 1) % (items.size + 1), answer)
+        return items.map { Choice(label = it, value = it) }
     }
 
     fun start(track: Track? = null) {
@@ -908,6 +1089,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val reviewing = state.reviewing || state.finished
         state = state.copy(
             progress = Progress(idx = index),
+            // 讲义只有一条进度：逐步翻到第几节，通读也停在那一节。
+            readingAt = if (state.isDoc) index else state.readingAt,
             feedback = null,
             draft = "",
             finished = false,
@@ -923,7 +1106,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             askInput = "",
             askPartial = "",
         )
-        persist()
+        // 回看只是翻着看，游标不能跟着走。
+        if (!state.reviewing) persist()
         val brief = plan.steps[index]
         if (state.contents.containsKey(brief.n)) {
             prefetch(plan, index + 1)
@@ -1105,7 +1289,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     /** 回看中途想退出：回到「走完了」那一屏，记录仍然是已完成。 */
     fun endReview() {
         if (!state.reviewing) return
-        state = state.copy(reviewing = false, finished = true)
+        state = state.copy(
+            reviewing = false,
+            finished = true,
+            progress = Progress(idx = state.reviewResume),
+            passed = state.reviewPassed,
+        )
         persist(finished = true)
         refreshRecords()
     }
@@ -1158,12 +1347,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             reviewing = true,
             // 回看是逐步翻题，不是接着读；上次停在通读也得回到单步。
             reading = false,
+            reviewResume = state.progress.idx,
+            reviewPassed = state.passed,
             progress = Progress(idx = 0),
             passed = plan.steps.indices.toSet(),
             draft = "",
             feedback = null,
         )
-        persist(finished = true)
+        // 这里不落盘：游标刚被归零，写下去记录页的进度条就当没学过。
     }
 
     // ---------------------------------------------------------------- 追问
@@ -1245,14 +1436,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
-    /** 通读滚到哪一节就记到哪一节。和做题游标分开，翻阅读不该改「你在第几步」。 */
+    /** 通读滚到哪一节就记到哪一节。 */
     fun noteReadingAt(index: Int) {
         if (!state.reading) return
         val total = state.plan?.steps?.size ?: return
         if (total <= 0) return
         val at = index.coerceIn(0, total - 1)
-        if (at == state.readingAt) return
-        state = state.copy(readingAt = at)
+        // 讲义没有作答，读到哪就是进度，三处（记录页 / 逐步 / 阅读器）共用一个数；
+        // 做题课的通读位置单独记，不能因为翻了两页就把「做到第几步」推走。
+        val moveCursor = state.isDoc && at != state.progress.idx
+        if (at == state.readingAt && !moveCursor) return
+        state = state.copy(
+            readingAt = at,
+            progress = if (state.isDoc) Progress(idx = at) else state.progress,
+        )
         persist()
     }
 
@@ -1371,7 +1568,12 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             contents = restored,
             screen = Screen.LESSON,
             offline = record.offline,
-            progress = Progress(idx = record.cursor.coerceIn(0, maxOf(0, record.plan.steps.lastIndex))),
+            // 讲义只有「读到哪」这一个进度：旧记录里可能只存了 readingAt，
+            // 取两者较大的，别让刚读的十几节退回去。
+            progress = Progress(
+                idx = (if (record.isDoc) maxOf(record.cursor, record.readingAt) else record.cursor)
+                    .coerceIn(0, maxOf(0, record.plan.steps.lastIndex))
+            ),
             feedback = null,
             draft = "",
             notes = "",
@@ -1431,8 +1633,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return updated
     }
 
-    private fun isDocPlan(record: LessonRecord): Boolean =
-        record.plan.steps.firstOrNull()?.judgeKind == "none" && record.source.isNotBlank()
+    private fun isDocPlan(record: LessonRecord): Boolean = record.isDoc
 
     /** 从错题本跳到某一课的具体一步。 */
     fun openAt(record: LessonRecord, step: Int) {
@@ -1446,6 +1647,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             lessons.delete(id)
             refreshRecords()
+            toast("已删除")
         }
     }
 

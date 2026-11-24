@@ -72,4 +72,23 @@ class RecordTest {
         // 通读翻到第 10 节，但做题游标还在第 4 步：记录卡的条仍指第 4 步。
         assertEquals(0.4f, record(cursor = 3).copy(reading = true, readingAt = 9).ratio, 0.001f)
     }
+
+    @Test
+    fun docNeedsEveryStepReadOnly() {
+        val doc = LessonRecord(
+            source = "# 讲义",
+            plan = LessonPlan(steps = List(3) { StepBrief(n = it + 1, judgeKind = "none") }),
+        )
+        assertTrue("整门课都没有提问，才是讲义", doc.isDoc)
+
+        val mixed = doc.copy(
+            plan = doc.plan.copy(
+                steps = doc.plan.steps.mapIndexed { index, brief ->
+                    if (index == 0) brief.copy(judgeKind = "choice") else brief
+                }
+            )
+        )
+        assertFalse("问答课哪怕有长答案节，也不算讲义", mixed.isDoc)
+        assertFalse("没有原文就不是讲义", doc.copy(source = "").isDoc)
+    }
 }
