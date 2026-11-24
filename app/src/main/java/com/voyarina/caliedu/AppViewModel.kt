@@ -34,6 +34,7 @@ import com.voyarina.caliedu.data.PdfScanner
 import com.voyarina.caliedu.data.SUPPORTED_HINT
 import com.voyarina.caliedu.data.LlmSettings
 import com.voyarina.caliedu.data.SettingsStore
+import com.voyarina.caliedu.data.TextScale
 import com.voyarina.caliedu.data.ThemeMode
 import com.voyarina.caliedu.data.withoutMistake
 import com.voyarina.caliedu.data.withoutMistakes
@@ -58,6 +59,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.roundToInt
 import java.io.File
 import java.util.UUID
 
@@ -80,6 +82,12 @@ private const val GRADE_TIMEOUT_MS = 45_000L
 
 /** 答案超过这个长度就不做成选择题了：选项装不下，判也判不准。 */
 private const val CHOICE_ANSWER_MAX = 320
+
+/** 一次最多拆几道长答案。拆得越多请求越多，长答案通常也就那几道。 */
+private const val MAX_SPLIT_ANSWERS = 6
+
+/** 自测题里的一道：问答 + 该做成选择题还是留成阅读节。 */
+private data class QuizItem(val qa: Qa, val choice: Boolean)
 
 /** 接力模式一批写几步。再多，单次输出就容易在 4k token 处被截断。 */
 private const val RELAY_BATCH_STEPS = 6
@@ -144,6 +152,10 @@ data class UiState(
     val readingAt: Int = -1,
     /** 顶栏要不要直接放一个通读/单步切换：默认收在齿轮里。 */
     val readingBar: Boolean = false,
+    /** 记录页顶部那张汇总卡（几门课、答对几题）要不要显示。 */
+    val statsStrip: Boolean = true,
+    /** 这一份讲义按什么标记分节；做题课用不上，恒为 auto。 */
+    val mark: String = MdLesson.MARK_AUTO,
     val toast: String? = null,
     val solved: Int = 0,
     val wrongs: Int = 0,
@@ -255,6 +267,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             store.readingBarFlow.collect { saved -> state = state.copy(readingBar = saved) }
         }
         viewModelScope.launch {
+            store.statsFlow.collect { saved -> state = state.copy(statsStrip = saved) }
+        }
+        viewModelScope.launch {
             store.libraryFlow.collect { saved -> state = state.copy(library = saved) }
         }
         viewModelScope.launch {
@@ -279,7 +294,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 拖动时只改内存，松手才落盘——否则每一帧都在写 DataStore。 */
     fun setTextScale(scale: Float) {
-        state = state.copy(textScale = scale.coerceIn(0.9f, 1.4f))
+        state = state.copy(textScale = TextScale.snap(scale))
     }
 
     fun commitTextScale() {
@@ -289,6 +304,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun setReadingBar(on: Boolean) {
         state = state.copy(readingBar = on)
         viewModelScope.launch { store.saveReadingBar(on) }
+    }
+
+    fun setStatsStrip(on: Boolean) {
+        state = state.copy(statsStrip = on)
+        viewModelScope.launch { store.saveStats(on) }
     }
 
     /** 设置页改成边改边存，所以这里不跳页面。 */
@@ -431,8 +451,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             result.onSuccess { scanned ->
-                // 单独挑进来的那几个跟文件夹无关，重新扫描不能把它们冲掉。
-                val library = scanned.copy(extraItems = state.library.extraItems)
+                // 单独挑进来的那几个跟文件夹无关，重新扫描不能把它们冲掉；
+                // 手动移出列表的名单也一样——换了文件夹才作废。
+                val sameTree = scanned.treeUri == state.library.treeUri
+                val library = scanned.copy(
+                    extraItems = state.library.extraItems,
+                    hidden = if (sameTree) state.library.hidden else emptyList(),
+                )
                 store.saveLibrary(library)
                 state = state.copy(library = library, libraryBusy = false)
             }.onFailure { e ->
@@ -569,7 +594,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 state = state.copy(error = "这个文件读不出内容。")
                 return@launch
             }
-            openDoc(raw, item.name.substringBeforeLast('.'))
+            openDoc(raw, item.name.substringBeforeLast('.'), item.uri)
         }
     }
 
@@ -715,22 +740,27 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun openDoc(raw: String, name: String) {
+    private fun openDoc(raw: String, name: String, uri: String = "") {
         work?.cancel()
         endLoading()
-        val doc = MdLesson.parse(raw, name)
-        // 同一份讲义（标题 + 原文长度相同）再打开一次，接着上次读到的地方，
-        // 而不是复制一份 176KB 的原文进记录。
-        val same = state.records.firstOrNull {
-            it.offline && it.plan.title == doc.plan.title && it.source.length == raw.length
-        }
+        // 同一份原文再打开一次，接着上次读到的地方，而不是复制一份 176KB 的原文进记录。
+        // 比字符串本身而不是长度：两篇长度相同的不同讲义会被误判成同一份。
+        val same = state.records.firstOrNull { it.offline && it.source == raw }
+        val mark = same?.mark ?: MdLesson.MARK_AUTO
+        val doc = MdLesson.parse(raw, name, mark)
         if (same != null) {
-            openRecord(refreshDoc(same, doc, raw))
+            var target = refreshDoc(same, doc, raw)
+            // 老记录没存 uri，资料页就只能按文件名猜。这次既然知道是哪个文件读进来的，补上。
+            if (uri.isNotBlank() && target.uri != uri) {
+                target = target.copy(uri = uri)
+                saveRecord(target)
+            }
+            openRecord(target)
             return
         }
         switchLesson()
         if (doc.plan.steps.isEmpty()) {
-            state = state.copy(error = "这份 Markdown 里没找到可分节的小标题（## ）。")
+            state = state.copy(error = "这份 Markdown 里没找到可分节的标记（# / ## / > ）。")
             return
         }
         val now = System.currentTimeMillis()
@@ -744,6 +774,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             createdAt = now,
             updatedAt = now,
             plan = doc.plan,
+            mark = mark,
+            uri = uri,
         )
         state = state.copy(
             plan = doc.plan,
@@ -760,12 +792,60 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             readingAt = -1,
             recordId = record.id,
             lessonReturn = lessonReturnOf(),
+            mark = mark,
             solved = 0,
             wrongs = 0,
             mistakes = emptyList(),
             passed = emptySet(),
         )
         saveRecord(record)
+    }
+
+    /**
+     * 换一份讲义的分节标记。
+     *
+     * 自动判断认错的时候（整篇只有一节，或者被 `###` 切得太碎），在这里改一次，
+     * 之后每次打开都按这个标记切。位置按「读到第几成」换算，不会一下跳回开头。
+     */
+    fun setSectionMark(mark: String) {
+        val record = state.records.firstOrNull { it.id == state.recordId }
+        if (record == null || record.source.isBlank()) {
+            toast("这一课不是从讲义来的，没有分节标记可换。")
+            return
+        }
+        val doc = MdLesson.parse(record.source, record.headline, mark)
+        if (doc.plan.steps.isEmpty()) {
+            toast("按「${MdLesson.labelOf(mark)}」切不出任何一节。")
+            return
+        }
+        val oldTotal = state.plan?.steps?.size ?: 0
+        val ratio = if (oldTotal <= 1) 0f else state.progress.idx.toFloat() / (oldTotal - 1)
+        val newTotal = doc.plan.steps.size
+        val cursor = (ratio * (newTotal - 1)).roundToInt().coerceIn(0, newTotal - 1)
+        val at = if (state.readingAt >= 0) cursor else state.readingAt
+
+        val updated = record.copy(
+            title = doc.plan.title,
+            oneLine = doc.plan.oneLine,
+            plan = doc.plan,
+            contents = doc.contents,
+            mark = doc.mark,
+            cursor = cursor,
+            readingAt = at,
+            finished = false,
+            updatedAt = System.currentTimeMillis(),
+        )
+        state = state.copy(
+            plan = doc.plan,
+            contents = doc.contents,
+            progress = Progress(idx = cursor),
+            readingAt = at,
+            mark = doc.mark,
+            finished = false,
+            passed = emptySet(),
+        )
+        saveRecord(updated)
+        toast("分节标记：${MdLesson.labelOf(doc.mark)} · 共 $newTotal 节")
     }
 
     /**
@@ -788,21 +868,48 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val qas = withContext(Dispatchers.Default) { QaParser.parse(raw) }
-            if (qas.size < 2) {
+            if (qas.isEmpty()) {
                 state = state.copy(libraryBusy = false)
-                toast("没识别到成对的 Q/A（形如 Q: … A: …）")
+                toast("没识别到成对的 Q/A（形如 Q: … A: …，写成引用块也认）")
                 return@launch
             }
             state = state.copy(libraryBusy = false)
-            beginLoading("正在给 ${qas.size} 道问答出选项")
+            val settings = store.current()
+            val name = item.name.substringBeforeLast('.').ifBlank { "问答自测" }
+
+            // 一段话的答案没法直接做选择题：三个干扰项怎么造都判不准。
+            // 先让模型只在原文里「取」，把它拆成两三道答案很短的小题；
+            // 拆不动的（或者没配模型）留成阅读节——宁可少一道题，也不出一道判不准的题。
+            val longPairs = qas.mapIndexedNotNull { index, qa ->
+                if (qa.answer.length > CHOICE_ANSWER_MAX) (index + 1) to qa else null
+            }
+            beginLoading(
+                if (longPairs.isEmpty()) "正在给 ${qas.size} 道问答出选项"
+                else "正在把长答案拆成小题"
+            )
             try {
-                val settings = store.current()
-                val plan = quizPlan(item, raw, qas)
-                val asking = plan.steps.filter { it.judgeKind == "choice" }.map { it.n }
-                val pairs = qas.mapIndexed { index, qa -> (index + 1) to qa }
-                    .filter { it.first in asking }
-                val options = generator.quizOptions(settings, plan.title, pairs)
-                openQuiz(item, plan, qas, options)
+                val splits = if (longPairs.isEmpty()) {
+                    emptyMap()
+                } else {
+                    generator.splitLongAnswers(settings, name, longPairs.take(MAX_SPLIT_ANSWERS))
+                }
+                val items = buildList {
+                    qas.forEachIndexed { index, qa ->
+                        val sub = splits[index + 1]
+                        when {
+                            qa.answer.length <= CHOICE_ANSWER_MAX -> add(QuizItem(qa, true))
+                            !sub.isNullOrEmpty() -> sub.forEach { add(QuizItem(it, true)) }
+                            else -> add(QuizItem(qa, false))
+                        }
+                    }
+                }
+                val asking = items.mapIndexedNotNull { index, item ->
+                    if (item.choice) (index + 1) to item.qa else null
+                }
+                state = state.copy(loading = "正在给 ${asking.size} 道问答出选项")
+                val plan = quizPlan(item, raw, items, name)
+                val options = generator.quizOptions(settings, plan.title, asking)
+                openQuiz(plan, items, options)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -811,22 +918,21 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun quizPlan(item: PdfItem, raw: String, qas: List<Qa>): LessonPlan {
-        val name = item.name.substringBeforeLast('.').ifBlank { "问答自测" }
+    private fun quizPlan(item: PdfItem, raw: String, items: List<QuizItem>, name: String): LessonPlan {
         val track = TrackDetector.detect(raw)
         return LessonPlan(
             title = name.take(40),
             kind = track.key,
-            oneLine = "${qas.size} 问",
+            oneLine = "${items.count { it.choice }} 问",
             tags = Subject.guess(raw, name)?.let { listOf(it) }
                 ?: Subject.normalize(emptyList(), track, name),
-            steps = qas.mapIndexed { index, qa ->
+            steps = items.mapIndexed { index, item ->
                 StepBrief(
                     n = index + 1,
-                    title = qa.question.take(24),
+                    title = item.qa.question.take(24),
                     stage = "自测",
                     goal = "",
-                    judgeKind = if (qa.answer.length <= CHOICE_ANSWER_MAX) "choice" else "none",
+                    judgeKind = if (item.choice) "choice" else "none",
                 )
             },
             needsRun = false,
@@ -834,13 +940,13 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun openQuiz(
-        item: PdfItem,
         plan: LessonPlan,
-        qas: List<Qa>,
+        items: List<QuizItem>,
         options: Map<Int, List<String>>,
     ) {
-        val contents = qas.mapIndexed { index, qa ->
+        val contents = items.mapIndexed { index, item ->
             val n = index + 1
+            val qa = item.qa
             val distractors = options[n].orEmpty()
                 .filter { Judge.normalize(it) != Judge.normalize(qa.answer) }
                 .distinctBy { Judge.normalize(it) }
@@ -1559,7 +1665,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         endLoading()
         // 讲义型记录只存了原文，正文在打开时重新切一遍
         val restored = if (record.contents.isEmpty() && isDocPlan(record)) {
-            runCatching { MdLesson.parse(record.source, record.headline).contents }.getOrDefault(emptyMap())
+            runCatching { MdLesson.parse(record.source, record.headline, record.mark).contents }
+                .getOrDefault(emptyMap())
         } else {
             record.contents
         }
@@ -1582,6 +1689,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             // 上次退出时停在通读，这次进来就还在通读，而且翻回读到的那一节。
             reading = record.reading,
             readingAt = record.readingAt,
+            mark = record.mark,
             recordId = record.id,
             lessonReturn = lessonReturnOf(),
             solved = record.solved,
@@ -1622,6 +1730,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             source = raw,
             plan = doc.plan,
             contents = doc.contents,
+            mark = doc.mark,
             cursor = record.cursor.coerceIn(0, doc.plan.steps.lastIndex),
             passed = record.passed.filter { it < doc.plan.steps.size },
             updatedAt = System.currentTimeMillis(),

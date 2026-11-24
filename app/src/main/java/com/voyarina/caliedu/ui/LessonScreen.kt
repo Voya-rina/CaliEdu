@@ -44,6 +44,8 @@ import androidx.compose.material.icons.rounded.Functions
 import androidx.compose.material.icons.rounded.Lightbulb
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
@@ -79,9 +81,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voyarina.caliedu.UiState
 import com.voyarina.caliedu.core.Category
+import com.voyarina.caliedu.core.MdLesson
 import com.voyarina.caliedu.core.Track
 import com.voyarina.caliedu.core.Verdict
 import com.voyarina.caliedu.data.ChannelMode
+import com.voyarina.caliedu.data.TextScale
 import com.voyarina.caliedu.model.Choice
 import com.voyarina.caliedu.model.StepContent
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -119,6 +123,7 @@ fun LessonScreen(
     onScaleCommit: () -> Unit,
     onReadAt: (Int) -> Unit,
     onRecategorize: (String) -> Unit,
+    onSectionMark: (String) -> Unit,
 ) {
     val skin = LocalSkin.current
     val plan = state.plan ?: return
@@ -427,6 +432,8 @@ fun LessonScreen(
         LessonSettingsSheet(
             scale = state.textScale,
             reading = state.reading,
+            mark = state.mark,
+            pickMark = state.isDoc && state.records.any { it.id == state.recordId && it.source.isNotBlank() },
             allowPlay = state.settings.runCode && track == Track.CODE,
             onChangeScale = onScale,
             onCommitScale = onScaleCommit,
@@ -434,6 +441,7 @@ fun LessonScreen(
                 settingsOpen = false
                 onToggleReading()
             },
+            onMark = onSectionMark,
             onExport = { kind ->
                 settingsOpen = false
                 onExport(kind)
@@ -463,23 +471,30 @@ fun LessonScreen(
 }
 
 /**
- * 字号、单步/通读、导出，原来占着标题栏三个位置，挤得标题只剩半个字。
- * 现在都收在这个面板里。
+ * 字号、单步/通读、分节标记、导出。
+ *
+ * 字号和「设置 → 外观」是同一个数、同一套刻度，在哪儿拖都一样；
+ * 分节标记是这一份讲义自己的事，所以只在这里。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun LessonSettingsSheet(
     scale: Float,
     reading: Boolean,
+    mark: String,
+    pickMark: Boolean,
     allowPlay: Boolean,
     onChangeScale: (Float) -> Unit,
     onCommitScale: () -> Unit,
     onToggleReading: () -> Unit,
+    onMark: (String) -> Unit,
     onExport: (ExportKind) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val skin = LocalSkin.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var markOpen by remember { mutableStateOf(false) }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -500,15 +515,23 @@ private fun LessonSettingsSheet(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("A", fontSize = skin.fs(11.5f), color = skin.sub)
                 Slider(
-                    value = scale,
+                    value = TextScale.clamp(scale),
                     onValueChange = onChangeScale,
                     onValueChangeFinished = onCommitScale,
-                    valueRange = 0.9f..1.4f,
+                    valueRange = TextScale.MIN..TextScale.MAX,
+                    steps = TextScale.STEPS,
                     modifier = Modifier
                         .weight(1f)
                         .padding(horizontal = 10.dp),
                 )
                 Text("A", fontSize = skin.fs(22f), color = skin.sub)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    TextScale.label(scale),
+                    fontSize = skin.fs(12f),
+                    color = if (scale > 1.001f) skin.accentDeep else skin.sub,
+                    modifier = Modifier.width(38.dp),
+                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -516,6 +539,51 @@ private fun LessonSettingsSheet(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ModePill("单步", active = !reading) { onToggleReading() }
                 ModePill("通读", active = reading) { onToggleReading() }
+            }
+
+            if (pickMark) {
+                Spacer(Modifier.height(16.dp))
+                SectionLabel("按什么分节")
+                Box {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(skin.codeBg, RoundedCornerShape(100.dp))
+                            .clickable { markOpen = true }
+                            .padding(horizontal = 15.dp, vertical = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            MdLesson.labelOf(mark),
+                            fontSize = skin.fs(12.5f),
+                            color = skin.text,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            Icons.Rounded.ExpandMore,
+                            contentDescription = "选择分节标记",
+                            tint = skin.sub,
+                            modifier = Modifier.size(skin.ui(16f)),
+                        )
+                    }
+                    DropdownMenu(expanded = markOpen, onDismissRequest = { markOpen = false }) {
+                        MdLesson.MARKS.forEach { option ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        MdLesson.labelOf(option),
+                                        fontSize = skin.fs(12.5f),
+                                        color = if (option == mark) skin.accent else skin.text,
+                                    )
+                                },
+                                onClick = {
+                                    markOpen = false
+                                    if (option != mark) onMark(option)
+                                },
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(Modifier.height(18.dp))

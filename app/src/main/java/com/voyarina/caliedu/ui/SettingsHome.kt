@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.FormatSize
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material3.Icon
@@ -38,14 +39,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voyarina.caliedu.UiState
 import com.voyarina.caliedu.data.ChannelMode
+import com.voyarina.caliedu.data.TextScale
 import com.voyarina.caliedu.data.ThemeMode
-import kotlin.math.roundToInt
 
 @Composable
 fun SettingsHome(
@@ -55,6 +57,7 @@ fun SettingsHome(
     onScale: (Float) -> Unit,
     onScaleCommit: () -> Unit,
     onReadingBar: (Boolean) -> Unit,
+    onStats: (Boolean) -> Unit,
 ) {
     val skin = LocalSkin.current
     // 版本号从安装包读，不认 BuildConfig：包名改过一次，编译期常量会跟着变。
@@ -95,6 +98,15 @@ fun SettingsHome(
                 title = "顶栏显示通读开关",
                 checked = state.readingBar,
                 onToggle = onReadingBar,
+            )
+
+            Spacer(Modifier.height(20.dp))
+            Group("记录")
+            ToggleRow(
+                icon = Icons.Rounded.Insights,
+                title = "顶部统计卡",
+                checked = state.statsStrip,
+                onToggle = onStats,
             )
 
             Spacer(Modifier.height(20.dp))
@@ -152,7 +164,7 @@ private fun SettingRow(
             .fillMaxWidth()
             .background(skin.surface, shape)
             .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 0.5.dp, skin.line, shape)
-            .let { base -> if (onClick != null) base.clickable(onClick = onClick) else base }
+            .let { base -> if (onClick != null) base.clickable(role = Role.Button, onClick = onClick) else base }
             .padding(horizontal = 15.dp, vertical = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -214,7 +226,8 @@ private fun ToggleRow(
     }
 }
 
-/** 字号放在设置首页直接拖，拖完松手才写盘。 */@Composable
+/** 字号放在设置首页直接拖，拖完松手才写盘。刻度与阅读器共用 [TextScale]。 */
+@Composable
 private fun ScaleCard(scale: Float, onChange: (Float) -> Unit, onCommit: () -> Unit) {
     val skin = LocalSkin.current
     val shape = RoundedCornerShape(skin.radiusCard)
@@ -235,16 +248,16 @@ private fun ScaleCard(scale: Float, onChange: (Float) -> Unit, onCommit: () -> U
             Spacer(Modifier.width(13.dp))
             Text("字号", fontSize = skin.bodySize, color = skin.text, modifier = Modifier.weight(1f))
             Text(
-                "${(scale * 100).roundToInt()}%",
+                TextScale.label(scale),
                 fontSize = skin.fs(12.5f),
                 color = if (scale > 1.001f) skin.accentDeep else skin.sub,
             )
         }
         Slider(
-            value = scale,
+            value = TextScale.clamp(scale),
             onValueChange = onChange,
-            valueRange = 0.9f..1.4f,
-            steps = 9,
+            valueRange = TextScale.MIN..TextScale.MAX,
+            steps = TextScale.STEPS,
             onValueChangeFinished = onCommit,
             colors = SliderDefaults.colors(
                 thumbColor = skin.accent,

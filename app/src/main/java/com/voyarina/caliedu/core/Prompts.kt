@@ -557,4 +557,39 @@ $schema
         }
         append("\n只输出这 ").append(items.size).append(" 道题。")
     }
+
+    /**
+     * 长答案拆题。
+     *
+     * 讲义里「Q：xxx A：一整段」的问答做不了选择题——答案是一段话，
+     * 干扰项怎么造都判不准。折中的办法是让模型只在原文里**取**：
+     * 把一段答案拆成两三道答案很短的小题，答对与否才判得清。
+     *
+     * 强调「只取不写」：一旦允许它改写，就会开始编原文里没有的结论。
+     */
+    fun splitSystem(): String = """
+你在把讲义里的一段长答案拆成几道小题。原文是作者写的，你只能从里面取，不许补充、不许改写结论。
+
+每道小题：
+1. 问题要能单独读懂，不许出现「上面说的」「这一步」「这个函数」这类指代——读者看不到上下文。
+2. 答案 4~20 字，必须是原文里能直接对上的短语、数字或短句。
+3. 一个问题只问一件事，不要「是什么、为什么、怎么做」三合一。
+
+每题拆 1~3 道，宁少不多。原文里确实只有一句话的，就只给 1 道。
+只输出 JSON，不要解释，不要 markdown 围栏：
+
+{"items":[{"n":1,"qa":[{"q":"问题","a":"答案"}]}]}
+""".trim()
+
+    fun splitUser(title: String, items: List<Pair<Int, Qa>>): String = buildString {
+        append("讲义：").append(title)
+        append("\n下面每段答案都太长，做不了选择题。n 与题号一致。\n")
+        items.forEach { (n, qa) ->
+            append("\n[").append(n).append("]\n")
+            append("问：").append(qa.question.trim()).append('\n')
+            // 只喂前 900 字：长答案的重点几乎都在开头，喂全了既贵又容易跑题。
+            append("答：").append(qa.answer.trim().take(900)).append('\n')
+        }
+        append("\n只输出这 ").append(items.size).append(" 组。")
+    }
 }

@@ -56,6 +56,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +75,7 @@ fun RecordsScreen(
     records: List<LessonRecord>,
     tab: Int,
     filter: String,
+    showStats: Boolean,
     onTab: (Int) -> Unit,
     onFilter: (String) -> Unit,
     onOpen: (LessonRecord) -> Unit,
@@ -218,10 +220,13 @@ fun RecordsScreen(
 
         if (records.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
-            StatsStrip(stats)
-            if (stats.mastery.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                MasteryBlock(stats)
+            // 汇总卡可以在设置里关掉：只想知道「还有几题要复习」的话，它占的是首屏。
+            if (showStats) {
+                StatsStrip(stats)
+                if (stats.mastery.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    MasteryBlock(stats)
+                }
             }
             val openCount = allMistakes.count { !it.mistake.fixed }
             val reviewCount = if (stats.due > 0) stats.due else openCount
@@ -712,7 +717,12 @@ private fun RecordCard(
             .clip(shape)
             .background(skin.surface, shape)
             .border(if (skin.borderWidth > 0.dp) skin.borderWidth else 1.dp, skin.line, shape)
-            .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+            .combinedClickable(
+                role = Role.Button,
+                onClick = onOpen,
+                onLongClick = onLongPress,
+                onLongClickLabel = "改分类",
+            )
             .padding(horizontal = 15.dp, vertical = 13.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

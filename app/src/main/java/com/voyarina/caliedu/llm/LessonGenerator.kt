@@ -309,8 +309,7 @@ class LessonGenerator(
         return out
     }
 
-    /** 按题号对号入座；模型写成 1..n 的局部编号时，按出现顺序补空位。 */
-    internal fun parseOptions(raw: String, numbers: List<Int>): Map<Int, List<String>> {
+    /** 按题号对号入座；模型写成 1..n 的局部编号时，按出现顺序补空位。 */    internal fun parseOptions(raw: String, numbers: List<Int>): Map<Int, List<String>> {
         val text = JsonRepair.extract(raw) ?: return emptyMap()
         val root = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return emptyMap()
         val array = when (root) {
@@ -338,6 +337,71 @@ class LessonGenerator(
         leftovers.forEach { options ->
             while (cursor < numbers.size && numbers[cursor] in slots) cursor++
             if (cursor < numbers.size) slots[numbers[cursor]] = options
+        }
+        return slots
+    }
+
+    /**
+     * 把答案太长、做不成选择题的问答拆成几道小题。
+     *
+     * 一次只发三道、每道只给 900 字：拆题要的是精准取词，
+     * 不是让模型总结全文；喂得越多，它越容易开始自由发挥。
+     */
+    suspend fun splitLongAnswers(
+        settings: LlmSettings,
+        title: String,
+        items: List<Pair<Int, Qa>>,
+    ): Map<Int, List<Qa>> {
+        if (items.isEmpty() || !settings.canTalk) return emptyMap()
+        val out = mutableMapOf<Int, List<Qa>>()
+        items.chunked(3).forEach { batch ->
+            val raw = runCatching {
+                channelOf(settings).complete(
+                    Prompts.splitSystem(),
+                    Prompts.splitUser(title, batch),
+                    json = true,
+                    label = "拆长答案（${batch.size} 段）",
+                )
+            }.getOrNull() ?: return@forEach
+            out += parseSplits(raw, batch.map { it.first })
+        }
+        return out
+    }
+
+    /** 解析拆题结果。题号对不上就按出现顺序补位，跟干扰项那边同一套办法。 */
+    internal fun parseSplits(raw: String, numbers: List<Int>): Map<Int, List<Qa>> {
+        val text = JsonRepair.extract(raw) ?: return emptyMap()
+        val root = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return emptyMap()
+        val array = when (root) {
+            is JsonArray -> root
+            is JsonObject -> root["items"] as? JsonArray ?: return emptyMap()
+            else -> return emptyMap()
+        }
+        val parsed = array.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            val n = (obj["n"] as? JsonPrimitive)?.content?.toIntOrNull()
+            val pairs = (obj["qa"] as? JsonArray)
+                ?.mapNotNull { pairEl ->
+                    val pair = pairEl as? JsonObject ?: return@mapNotNull null
+                    val q = (pair["q"] as? JsonPrimitive)?.content?.trim().orEmpty()
+                    val a = (pair["a"] as? JsonPrimitive)?.content?.trim().orEmpty()
+                    if (q.isBlank() || a.isBlank()) null else Qa(q, a)
+                }
+                ?.take(3)
+                .orEmpty()
+            if (pairs.isEmpty()) null else n to pairs
+        }
+        if (parsed.isEmpty()) return emptyMap()
+
+        val slots = mutableMapOf<Int, List<Qa>>()
+        val leftovers = mutableListOf<List<Qa>>()
+        parsed.forEach { (n, pairs) ->
+            if (n != null && n in numbers && n !in slots) slots[n] = pairs else leftovers += pairs
+        }
+        var cursor = 0
+        leftovers.forEach { pairs ->
+            while (cursor < numbers.size && numbers[cursor] in slots) cursor++
+            if (cursor < numbers.size) slots[numbers[cursor]] = pairs
         }
         return slots
     }

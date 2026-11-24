@@ -45,4 +45,36 @@ class QuizOptionsTest {
     fun garbageReturnsNothing() {
         assertTrue(generator.parseOptions("模型今天不想干活", listOf(1, 2)).isEmpty())
     }
+
+    // ---------------------------------------------------------------- 长答案拆题
+
+    private val split = """{"items":[{"n":1,"qa":[{"q":"为什么要归一化？","a":"让各维尺度一致"},{"q":"归一化减的是哪个值？","a":"最小值"}]}]}"""
+
+    @Test
+    fun splitKeepsEverySubQuestion() {
+        val out = generator.parseSplits(split, listOf(1))
+        assertEquals(2, out[1]?.size)
+        assertEquals("归一化减的是哪个值？", out[1]?.get(1)?.question)
+        assertEquals("最小值", out[1]?.get(1)?.answer)
+    }
+
+    @Test
+    fun splitWithoutAnswersIsDropped() {
+        val raw = """{"items":[{"n":1,"qa":[{"q":"只有问题","a":"  "}]}]}"""
+        assertTrue(generator.parseSplits(raw, listOf(1)).isEmpty())
+    }
+
+    @Test
+    fun splitNumberingFallsBackToOrder() {
+        // 第二批模型又从 1 开始编号，这一批其实是第 4 段
+        val out = generator.parseSplits(split, listOf(4))
+        assertEquals(2, out[4]?.size)
+    }
+
+    @Test
+    fun splitCapsAtThree() {
+        val raw = """{"items":[{"n":1,"qa":[
+            {"q":"一","a":"1"},{"q":"二","a":"2"},{"q":"三","a":"3"},{"q":"四","a":"4"}]}]}"""
+        assertEquals(3, generator.parseSplits(raw, listOf(1))[1]?.size)
+    }
 }

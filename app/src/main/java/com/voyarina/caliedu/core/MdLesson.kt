@@ -12,37 +12,68 @@ import com.voyarina.caliedu.model.StepContent
  * 不是每道题都值得现生成一遍——教材、笔记、别人整理好的题解，本来就已经是分好节的。
  * 正文原样保留，每节不带提问（question 留空），学习页会退化成纯阅读。
  *
- * 分节这件事比看上去麻烦，两个坑都踩过：
+ * 分节这件事比看上去麻烦，三个坑都踩过：
  * 1. 代码块里以 `#` 开头的是 Python 注释，不是标题。不认围栏的话，
  *    一份讲义会被 `# ======` 这种注释切出几十个只有两行的碎片。
  * 2. 讲义常常有多个一级标题（书名、章、部分）。只按「# 和 ## 都算一节」切，
  *    章标题会变成正文只有两句话的孤儿节，而它真正的作用是给下面几节分组。
+ * 3. 同一批讲义的分节习惯并不统一：有的用 `##`，有的用 `###`，有的干脆用引用块
+ *    当节标题。自动判断大部分时候对，但认错了只能整份重导——所以阅读器里
+ *    留了一个下拉，让每一份讲义自己说按什么切。
  */
 object MdLesson {
 
-    data class Doc(val plan: LessonPlan, val contents: Map<Int, StepContent>)
+    data class Doc(
+        val plan: LessonPlan,
+        val contents: Map<Int, StepContent>,
+        /** 实际生效的分节标记：`auto` 或 `1`~`6` 或 `>`。 */
+        val mark: String = MARK_AUTO,
+    )
+
+    /** 交给自动判断。 */
+    const val MARK_AUTO = "auto"
+
+    /** 阅读器下拉里能选的那几个。 */
+    val MARKS: List<String> = listOf(MARK_AUTO, "1", "2", "3", "4", ">")
+
+    fun labelOf(mark: String): String = when (mark) {
+        MARK_AUTO -> "自动"
+        ">" -> "引用块 >"
+        else -> "#".repeat(mark.toIntOrNull() ?: 2)
+    }
 
     /** 太短的小节多半是章节封面或者分隔线，收进来只是给自己添堵。 */
-    private const val MIN_BODY = 24
+    private const val MIN_BODY = 12
 
     private const val MAX_TITLE = 40
 
     private data class Head(val line: Int, val level: Int, val text: String)
 
-    fun parse(raw: String, fallbackTitle: String = "未命名讲义"): Doc {
+    fun parse(raw: String, fallbackTitle: String = "未命名讲义", mark: String = MARK_AUTO): Doc {
         val lines = raw.replace("\r\n", "\n").split("\n")
         val heads = headings(lines)
+
+        // 指定用引用块分节：它跟 `#` 是两套完全不同的切法，单独走
+        if (mark == ">") {
+            val sections = quoteSections(lines)
+            if (sections.isNotEmpty()) {
+                val title = heads.firstOrNull()?.text?.ifBlank { fallbackTitle } ?: fallbackTitle
+                return Doc(planOf(title, raw, sections), contentsOf(sections), ">")
+            }
+            return parse(raw, fallbackTitle, MARK_AUTO)
+        }
 
         if (heads.isEmpty()) {
             // 没有任何标题：整篇当一节
             val body = raw.trim()
             val single = listOf("正文" to body)
-            return Doc(planOf(fallbackTitle, raw, single), contentsOf(single))
+            return Doc(planOf(fallbackTitle, raw, single), contentsOf(single), MARK_AUTO)
         }
 
         val titleHead = heads.first()
         val title = titleHead.text.ifBlank { fallbackTitle }
-        val level = sectionLevel(heads.drop(1))
+        val picked = mark.toIntOrNull()
+        val level = picked ?: sectionLevel(heads.drop(1))
 
         val sections = if (level <= 0) {
             // 通篇只有一个标题：标题之后的所有内容当一节
@@ -51,8 +82,32 @@ object MdLesson {
         } else {
             slice(lines, heads, level, titleHead.line + 1)
         }
-        val kept = sections.filter { it.second.length >= MIN_BODY }.ifEmpty { sections }
-        return Doc(planOf(title, raw, kept), contentsOf(kept))
+        if (sections.isEmpty() && picked != null) {
+            // 认错了标记（比如这份讲义根本没有 `###`）：退回自动，别给一个空列表
+            return parse(raw, fallbackTitle, MARK_AUTO)
+        }
+        val kept = mergeThin(sections)
+        return Doc(planOf(title, raw, kept), contentsOf(kept), picked?.toString() ?: MARK_AUTO)
+    }
+
+    /**
+     * 把过短的小节并进上一节。
+     *
+     * 原来是把短小节直接丢掉——但「短」不等于「空」，一节只有一句话也是正文，
+     * 丢掉就再也读不到了。并进去时把标题留成小标题，位置和信息都在。
+     */
+    private fun mergeThin(sections: List<Pair<String, String>>): List<Pair<String, String>> {
+        if (sections.none { it.second.length < MIN_BODY }) return sections
+        val out = mutableListOf<Pair<String, String>>()
+        sections.forEach { (name, body) ->
+            if (body.length >= MIN_BODY || out.isEmpty()) {
+                out += name to body
+            } else {
+                val last = out.removeAt(out.lastIndex)
+                out += last.first to (last.second + "\n\n## " + name + "\n\n" + body).trim()
+            }
+        }
+        return out
     }
 
     /**
@@ -161,6 +216,76 @@ object MdLesson {
             val last = out.removeAt(out.lastIndex)
             out += last.first to (last.second + "\n" + pending.joinToString("\n")).trim()
         }
+        return out
+    }
+
+    /**
+     * 按引用块切段：每个引用块开一节，块里的第一句当标题，其余算正文。
+     *
+     * 有些讲义（尤其是从网页剪下来的、或者拿引用块当章节牌的）既没有 `#` 也没有
+     * 编号，节与节的边界就是那一条竖线。这种情况下 `#` 一个都匹配不上，
+     * 只能按引用块切。
+     */
+    private fun quoteSections(lines: List<String>): List<Pair<String, String>> {
+        val out = mutableListOf<Pair<String, String>>()
+        var title: String? = null
+        var body = mutableListOf<String>()
+        // 第一个引用块之前的内容（书名、导语）不能丢，挂到第一节开头
+        val pending = mutableListOf<String>()
+        var fence: String? = null
+
+        fun flush() {
+            title?.let { out += it to body.joinToString("\n").trim() }
+            title = null
+            body = mutableListOf()
+        }
+
+        fun put(line: String) {
+            if (title == null) pending += line else body += line
+        }
+
+        var i = 0
+        while (i < lines.size) {
+            val trimmed = lines[i].trimStart()
+            if (fence != null) {
+                if (trimmed.startsWith(fence)) fence = null
+                put(lines[i])
+                i++
+                continue
+            }
+            if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+                fence = trimmed.take(3)
+                put(lines[i])
+                i++
+                continue
+            }
+            if (!trimmed.startsWith(">")) {
+                put(lines[i])
+                i++
+                continue
+            }
+
+            val run = mutableListOf<String>()
+            while (i < lines.size && lines[i].trimStart().startsWith(">")) {
+                run += lines[i].trimStart().removePrefix(">").trim()
+                i++
+            }
+            val headAt = run.indexOfFirst { it.isNotBlank() }
+            val head = if (headAt >= 0) run[headAt] else ""
+            if (head.isBlank()) {
+                run.forEach { put(it) }
+                continue
+            }
+            flush()
+            title = head.replace(Regex("[*`_]"), "").trim().ifBlank { "第 ${out.size + 1} 节" }
+            body = run.toMutableList()
+            body.removeAt(headAt)
+            if (pending.isNotEmpty()) {
+                body = (pending + body).toMutableList()
+                pending.clear()
+            }
+        }
+        flush()
         return out
     }
 

@@ -156,6 +156,7 @@ fun CaliEduApp(
                             records = state.records.filterNot { it.isDoc },
                             tab = state.recordsTab,
                             filter = state.recordsFilter,
+                            showStats = state.statsStrip,
                             onTab = vm::setRecordsTab,
                             onFilter = vm::setRecordsFilter,
                             onOpen = vm::openRecord,
@@ -178,6 +179,7 @@ fun CaliEduApp(
                             onScale = vm::setTextScale,
                             onScaleCommit = vm::commitTextScale,
                             onReadingBar = vm::setReadingBar,
+                            onStats = vm::setStatsStrip,
                         )
 
                         Screen.STYLE -> StyleScreen(
@@ -233,6 +235,7 @@ fun CaliEduApp(
                             onScaleCommit = vm::commitTextScale,
                             onReadAt = vm::noteReadingAt,
                             onRecategorize = { major -> vm.setCategory(state.recordId, major) },
+                            onSectionMark = vm::setSectionMark,
                             onGenerate = vm::ensureStep,
                             onFocusStep = { index ->
                                 vm.toggleReading()

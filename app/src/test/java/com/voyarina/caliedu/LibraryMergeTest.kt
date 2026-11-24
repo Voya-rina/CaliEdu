@@ -65,6 +65,23 @@ class LibraryMergeTest {
     }
 
     @Test
+    fun folderFileCanBeRemovedFromTheList() {
+        val scanned = item("a.md")
+        val lib = PdfLibrary(items = listOf(scanned))
+        assertTrue(lib.hasAny)
+        val next = lib.minus(scanned)
+        assertFalse("移出之后不该再列出来", next.hasAny)
+        assertTrue("磁盘上的条目还在，rescan 也照这份名单继续藏", next.hidden.contains(scanned.uri))
+    }
+
+    @Test
+    fun addingBackUnhidesTheFile() {
+        val scanned = item("a.md")
+        val lib = PdfLibrary(items = listOf(scanned)).minus(scanned)
+        assertTrue(lib.plus(scanned).visibleItems.isNotEmpty())
+    }
+
+    @Test
     fun countsFollowWhatIsVisible() {
         val lib = PdfLibrary(items = listOf(item("a.pdf")))
             .plus(item("b.md"))

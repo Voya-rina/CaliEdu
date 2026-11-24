@@ -37,6 +37,15 @@ data class LessonRecord(
     val reading: Boolean = false,
     /** 通读读到第几节（从 0 起）；-1 表示没通读过。和做题游标分开，互不覆盖。 */
     val readingAt: Int = -1,
+    /**
+     * 这份讲义按什么标记分节（`auto` / `1`~`6` / `>`）。
+     *
+     * 存在记录上而不是全局设置里：同一批讲义的分节习惯往往不一样，
+     * 全局选一个只会让另一批全错。
+     */
+    val mark: String = "auto",
+    /** 从哪个文件读进来的。资料页靠它把「文件」和「讲义」合成一条。 */
+    val uri: String = "",
 ) {
     val total: Int get() = plan.steps.size
 

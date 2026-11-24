@@ -86,4 +86,103 @@ class QaParserTest {
         val nodes = parseMarkdown("Q: 什么是指针？\n\nA: 存放地址的变量。")
         assertEquals(1, nodes.filterIsInstance<MdNode.Quiz>().size)
     }
+
+    /**
+     * 讲义里最常见的那种写法：整段包在引用块里。
+     * 认不出来就等于这个功能完全没生效——样例讲义全是这个格式。
+     */
+    @Test
+    fun blockQuoteIsAccepted() {
+        val qa = QaParser.split(
+            """
+            > **Q：为什么作者要用 1 / -1 / 0 来编码性别？**
+            >
+            > **A：** 三个原因，一个比一个深。
+            """.trimIndent()
+        )
+        assertEquals("为什么作者要用 1 / -1 / 0 来编码性别？", qa?.question)
+        assertEquals("三个原因，一个比一个深。", qa?.answer)
+    }
+
+    @Test
+    fun blockQuoteAnswersKeepNoMarkers() {
+        val qa = QaParser.split(
+            """
+            > **Q：** 归一化为什么要减最小值？
+            >
+            > **A：** 保证最小值落在 0。
+            > 1. 尺度一致
+            > 2. 平移对齐
+            """.trimIndent()
+        )
+        assertFalse(qa!!.answer.contains(">"))
+        assertTrue(qa.answer.contains("平移对齐"))
+    }
+
+    @Test
+    fun wholeFileWithQuotesIsParsed() {
+        val raw = """
+            # 讲义
+
+            > **Q：** 什么是学习率？
+
+            > **A：** 每次参数更新的步长。
+
+            > **Q：** 太大有什么问题？
+
+            > **A：** 会震荡甚至发散。
+        """.trimIndent()
+        val list = QaParser.parse(raw)
+        assertEquals(2, list.size)
+        assertEquals("什么是学习率？", list[0].question)
+        assertEquals("会震荡甚至发散。", list[1].answer)
+    }
+
+    @Test
+    fun numberedPrefixesAreAccepted() {
+        val qa = QaParser.split("Q1：什么是梯度？ A1：函数增长最快的方向。")
+        assertEquals("什么是梯度？", qa?.question)
+        assertEquals("函数增长最快的方向。", qa?.answer)
+    }
+
+    @Test
+    fun listPrefixIsStripped() {
+        val qa = QaParser.split("- **问：** 为什么要分训练集？\n- **答：** 用来判断过拟合。")
+        assertEquals("为什么要分训练集？", qa?.question)
+        assertEquals("用来判断过拟合。", qa?.answer)
+    }
+
+    @Test
+    fun quoteBlockInsideMarkdownBecomesQuiz() {
+        val nodes = parseMarkdown(
+            """
+            > **Q：为什么加了 copy() 就没问题？**
+            >
+            > **A：** 因为 copy() 申请了新内存。
+            """.trimIndent()
+        )
+        val quiz = nodes.filterIsInstance<MdNode.Quiz>()
+        assertEquals(1, quiz.size)
+        assertTrue(quiz[0].question.contains("copy()"))
+        assertTrue(quiz[0].answer.contains("新内存"))
+    }
+
+    /**
+     * 拿真讲义跑一遍：这份样例通篇都是 `> **Q：** … / > **A：** …`。
+     * 识别率掉下来的时候，这里是唯一能立刻发现的地方。
+     */
+    @Test
+    fun sampleLectureFindsEveryPair() {
+        val file = java.io.File("src/main/assets/samples/abalone.md")
+        org.junit.Assume.assumeTrue(file.exists())
+        val raw = file.readText()
+
+        val pairs = QaParser.parse(raw)
+        assertEquals(45, pairs.size)
+        assertTrue(pairs.none { it.answer.contains("**Q") })
+        assertTrue(pairs.none { it.question.startsWith(">") })
+
+        val quiz = parseMarkdown(raw).filterIsInstance<MdNode.Quiz>()
+        assertEquals(pairs.size, quiz.size)
+    }
 }

@@ -51,6 +51,8 @@ data class PdfLibrary(
     val scannedAt: Long = 0L,
     val items: List<PdfItem> = emptyList(),
     val extraItems: List<PdfItem> = emptyList(),
+    /** 用户手动移出列表的那几个。重扫文件夹时会照着这份名单把它们继续藏起来。 */
+    val hidden: List<String> = emptyList(),
 ) {
     val picked: Boolean get() = treeUri.isNotBlank()
 
@@ -58,7 +60,8 @@ data class PdfLibrary(
     val allItems: List<PdfItem> get() = (items + extraItems).distinctBy { it.uri }
 
     /** 界面上看得见的那些。PDF 关掉之后，之前收过的也不会再冒出来。 */
-    val visibleItems: List<PdfItem> get() = allItems.filter { it.supported }
+    val visibleItems: List<PdfItem>
+        get() = allItems.filter { it.supported && it.uri !in hidden }
 
     val totalSize: Long get() = visibleItems.sumOf { it.size }
 
@@ -70,14 +73,21 @@ data class PdfLibrary(
 
     /** 收一个单独挑的文件。已经在文件夹扫描里出现的，不再重复记一份。 */
     fun plus(item: PdfItem): PdfLibrary {
-        if (items.any { it.uri == item.uri }) return this
-        if (extraItems.any { it.uri == item.uri }) return this
-        return copy(extraItems = extraItems + item)
+        if (items.any { it.uri == item.uri }) return this.copy(hidden = hidden - item.uri)
+        if (extraItems.any { it.uri == item.uri }) return this.copy(hidden = hidden - item.uri)
+        return copy(extraItems = extraItems + item, hidden = hidden - item.uri)
     }
 
-    /** 移除单独挑的文件。只解除引用，不动磁盘上的源文件。 */
-    fun minus(item: PdfItem): PdfLibrary =
-        copy(extraItems = extraItems.filterNot { it.uri == item.uri })
+    /**
+     * 移出列表。只解除引用，不动磁盘上的源文件。
+     *
+     * 文件夹里扫出来的那些不能靠删 extraItems 消失，所以统一记进 [hidden]，
+     * 重扫时也照着它继续藏。
+     */
+    fun minus(item: PdfItem): PdfLibrary = copy(
+        extraItems = extraItems.filterNot { it.uri == item.uri },
+        hidden = (hidden + item.uri).distinct(),
+    )
 }
 
 /**

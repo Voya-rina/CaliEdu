@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.voyarina.caliedu.core.QaParser
 
 sealed class MdNode {
     data class Head(val level: Int, val text: String) : MdNode()
@@ -110,7 +111,9 @@ fun parseMarkdown(source: String): List<MdNode> {
                     quote += lines[i].trim().removePrefix(">").trim()
                     i++
                 }
-                out += MdNode.Quote(quote.joinToString(" "))
+                // 保留行：引用块里常是「Q + A + 几条编号」，拼成一行会变成
+                // 「三个原因 1. xxx 2. yyy」，遮罩点开之后没法读。
+                out += MdNode.Quote(quote.joinToString("\n").trim())
             }
 
             line.startsWith("- ") || line.startsWith("* ") -> {
@@ -172,31 +175,27 @@ fun parseMarkdown(source: String): List<MdNode> {
 }
 
 /**
- * 把「Q: … A: …」从普通段落里提出来。
+ * 把「Q: … A: …」从普通段落和引用块里提出来。
  *
- * 两种写法都要认：同一段里一句 Q 一句 A，以及中间空了一行、Q 和 A 各成一段。
+ * 三种写法都要认：同一段里一句 Q 一句 A；中间空了一行、Q 和 A 各成一段；
+ * 以及讲义最常用的 `> **Q：** …`（整块引用）。
  * 弄错的代价是整段问答按正文排出来，答案直接摊在眼前。
  */
 private fun mergeQuiz(nodes: List<MdNode>): List<MdNode> {
     val out = mutableListOf<MdNode>()
     var i = 0
     while (i < nodes.size) {
-        val node = nodes[i]
-        if (node is MdNode.Para) {
-            val same = com.voyarina.caliedu.core.QaParser.split(node.text)
+        val text = quizTextOf(nodes[i])
+        if (text != null) {
+            val same = QaParser.split(text)
             if (same != null) {
                 out += MdNode.Quiz(same.question, same.answer)
                 i++
                 continue
             }
-            val question = com.voyarina.caliedu.core.QaParser.questionOf(node.text)
+            val question = QaParser.questionOf(text)
             if (question != null && i + 1 < nodes.size) {
-                val next = nodes[i + 1]
-                val answer = if (next is MdNode.Para) {
-                    com.voyarina.caliedu.core.QaParser.answerOf(next.text)
-                } else {
-                    null
-                }
+                val answer = quizTextOf(nodes[i + 1])?.let { QaParser.answerOf(it) }
                 if (answer != null) {
                     out += MdNode.Quiz(question, answer)
                     i += 2
@@ -204,10 +203,17 @@ private fun mergeQuiz(nodes: List<MdNode>): List<MdNode> {
                 }
             }
         }
-        out += node
+        out += nodes[i]
         i++
     }
     return out
+}
+
+/** 可能写着问答的节点。引用块要算进来——「Q/A 放进引用块」是讲义里最常见的排版。 */
+private fun quizTextOf(node: MdNode): String? = when (node) {
+    is MdNode.Para -> node.text
+    is MdNode.Quote -> node.text
+    else -> null
 }
 
 fun inlineMarkdown(source: String, skin: Skin): AnnotatedString {

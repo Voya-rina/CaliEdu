@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlin.math.roundToInt
 
 /** 模型怎么接：直连（填 Key）或手动接力（复制提示词、粘回 JSON）。 */
 enum class ChannelMode(val key: String, val label: String, val note: String) {
@@ -58,6 +59,36 @@ data class LlmSettings(
     val canGrade: Boolean get() = canTalk && autoGrade && mode == ChannelMode.DIRECT
 }
 
+/**
+ * 字号档位：90%~130%，每档 5%。
+ *
+ * 刻度全用整数百分比算：`(1.3f - 0.9f) / 0.05f` 在浮点里是 7.999…，
+ * 取整会掉成 7，档位就变成每格 5.7%——110% 这一档直接被跳过。
+ */
+object TextScale {
+    const val MIN_PERCENT = 90
+    const val MAX_PERCENT = 130
+    const val STEP_PERCENT = 5
+
+    const val MIN = MIN_PERCENT / 100f
+    const val MAX = MAX_PERCENT / 100f
+
+    /** Slider 的 steps 是「两端之间还能停几个点」：(130-90)/5 档去掉两头。 */
+    val STEPS: Int = (MAX_PERCENT - MIN_PERCENT) / STEP_PERCENT - 1
+
+    fun clamp(scale: Float): Float = scale.coerceIn(MIN, MAX)
+
+    /** 对齐到最近的 5%：滑块和读数是同一个数，不会出现 103%。 */
+    fun snap(scale: Float): Float {
+        val percent = (percent(clamp(scale)) + STEP_PERCENT / 2f) / STEP_PERCENT
+        return clamp(percent.toInt() * STEP_PERCENT / 100f)
+    }
+
+    fun percent(scale: Float): Int = (scale * 100).roundToInt()
+
+    fun label(scale: Float): String = "${percent(scale)}%"
+}
+
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 class SettingsStore(private val context: Context) {
@@ -73,6 +104,7 @@ class SettingsStore(private val context: Context) {
     private val keyScale = floatPreferencesKey("text_scale")
     private val keyLibrary = stringPreferencesKey("pdf_library")
     private val keyReadingBar = booleanPreferencesKey("reading_toggle_bar")
+    private val keyStats = booleanPreferencesKey("records_stats")
 
     /** 解一次密要进 Keystore，而 DataStore 每次改风格/字号都会重新发一遍，缓存住省这趟。 */
     private var sealed: String? = null
@@ -102,9 +134,11 @@ class SettingsStore(private val context: Context) {
 
     val themeFlow: Flow<ThemeMode> = context.dataStore.data.map { p -> ThemeMode.of(p[keyTheme]) }
 
-    val scaleFlow: Flow<Float> = context.dataStore.data.map { p -> (p[keyScale] ?: 1f).coerceIn(0.9f, 1.4f) }
+    val scaleFlow: Flow<Float> = context.dataStore.data.map { p -> TextScale.snap(p[keyScale] ?: 1f) }
 
     val readingBarFlow: Flow<Boolean> = context.dataStore.data.map { p -> p[keyReadingBar] ?: false }
+
+    val statsFlow: Flow<Boolean> = context.dataStore.data.map { p -> p[keyStats] ?: true }
 
     val libraryFlow: Flow<PdfLibrary> = context.dataStore.data.map { p ->
         val raw = p[keyLibrary]
@@ -144,6 +178,10 @@ class SettingsStore(private val context: Context) {
 
     suspend fun saveReadingBar(on: Boolean) {
         context.dataStore.edit { p -> p[keyReadingBar] = on }
+    }
+
+    suspend fun saveStats(on: Boolean) {
+        context.dataStore.edit { p -> p[keyStats] = on }
     }
 
     suspend fun saveLibrary(library: PdfLibrary) {
