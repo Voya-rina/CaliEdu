@@ -77,4 +77,36 @@ class QuizOptionsTest {
             {"q":"一","a":"1"},{"q":"二","a":"2"},{"q":"三","a":"3"},{"q":"四","a":"4"}]}]}"""
         assertEquals(3, generator.parseSplits(raw, listOf(1))[1]?.size)
     }
+
+    // ---------------------------------------------------------------- 填空 / 变式
+
+    @Test
+    fun blankKeepsQuestionAndAnswer() {
+        val raw = """{"items":[{"n":2,"q":"归一化减的是 ____","a":"最小值"}]}"""
+        val out = generator.parseBlanks(raw, listOf(1, 2))
+        assertEquals("归一化减的是 ____", out[2]?.question)
+        assertEquals("最小值", out[2]?.answer)
+    }
+
+    @Test
+    fun blankLocalNumberingFallsBackToOrder() {
+        val raw = """{"items":[{"n":1,"q":"第一空 ____","a":"甲"},{"n":2,"q":"第二空 ____","a":"乙"}]}"""
+        val out = generator.parseBlanks(raw, listOf(7, 8))
+        assertEquals("甲", out[7]?.answer)
+        assertEquals("乙", out[8]?.answer)
+    }
+
+    @Test
+    fun variantReadsOptionsAlongWithAnswer() {
+        val raw = """{"items":[{"n":1,"q":"换情境后的题？","a":"正确","options":["错一","错二","错三"]}]}"""
+        val out = generator.parseVariants(raw, listOf(1))
+        assertEquals("正确", out[1]?.qa?.answer)
+        assertEquals(listOf("错一", "错二", "错三"), out[1]?.options)
+    }
+
+    @Test
+    fun variantWithoutOptionsIsStillAQuestion() {
+        val raw = """{"items":[{"n":1,"q":"换情境后的题？","a":"正确"}]}"""
+        assertEquals("正确", generator.parseVariants(raw, listOf(1))[1]?.qa?.answer)
+    }
 }

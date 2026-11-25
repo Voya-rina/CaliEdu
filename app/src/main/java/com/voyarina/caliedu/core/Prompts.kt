@@ -558,6 +558,56 @@ $schema
         append("\n只输出这 ").append(items.size).append(" 道题。")
     }
 
+    /** 填空题：只挖空，不改写。挖掉的那一段必须是答案里的原文。 */
+    fun blankSystem(): String = """
+你在把讲义里的问答改成填空题。每道题 answer 里最关键的那一小段挖掉，换成 ____。
+
+硬要求：
+1. 只能从原文里取，不许改写结论、不许补原文没有的信息。
+2. 每题只挖一个空，空里是 2~12 个字/词；挖掉的词必须仍是最关键的那个。
+3. q 要能单独读懂，把 ____ 放在它原本的位置，其余文字照抄。
+4. a 就是被挖掉的那一段原文，不要带引号、不要解释。
+5. 题干和答案都不超过 200 字。
+
+只输出 JSON，不要解释，不要 markdown 围栏：
+{"items":[{"n":1,"q":"题干 …… ____ ……","a":"挖掉的部分"}]}
+""".trim()
+
+    fun blankUser(title: String, items: List<Pair<Int, Qa>>): String = buildString {
+        append("讲义：").append(title)
+        append("\n下面每题按原文挖空，n 与题号一致。\n")
+        items.forEach { (n, qa) ->
+            append("\n").append(n).append(". 问：").append(qa.question.trim().take(220)).append('\n')
+            append("   答：").append(qa.answer.trim().take(300)).append('\n')
+        }
+        append("\n只输出这 ").append(items.size).append(" 道题。")
+    }
+
+    /** 变式题：换情境重出，一次给出题干、答案和干扰项，省一轮手动接力。 */
+    fun variantQuizSystem(): String = """
+你在给讲义里的问答出变式题。每题都要考同一个知识点，但情境、对象或数字必须换掉。
+
+硬要求：
+1. 只换情境和数，不换知识点、不换解题骨架；只把 3 改成 4 不算新题。
+2. q 要能单独读懂，条件给全、答案唯一；不超过 160 字，不要带解析。
+3. a 必须是一个短答案（不超过 20 字），不要解释。
+4. options 恰好 3 个错误答案，长度和 a 接近，错得像学生真会犯的错；不要「以上都不对」。
+5. 不许照抄原题的问题或答案。
+
+只输出 JSON，不要解释，不要 markdown 围栏：
+{"items":[{"n":1,"q":"变式题面","a":"短答案","options":["错1","错2","错3"]}]}
+""".trim()
+
+    fun variantQuizUser(title: String, items: List<Pair<Int, Qa>>): String = buildString {
+        append("讲义：").append(title)
+        append("\n下面每题出一道变式，n 与题号一致。\n")
+        items.forEach { (n, qa) ->
+            append("\n").append(n).append(". 原题：").append(qa.question.trim().take(220)).append('\n')
+            append("   答案：").append(qa.answer.trim().take(240)).append('\n')
+        }
+        append("\n只输出这 ").append(items.size).append(" 道题。")
+    }
+
     /**
      * 长答案拆题。
      *

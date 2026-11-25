@@ -153,6 +153,48 @@ class QaParserTest {
     }
 
     @Test
+    fun boldLabelOutsideColonIsAccepted() {
+        val qa = QaParser.split("**Q**：为什么用交叉验证？ **A**：避免单次划分碰运气。")
+        assertEquals("为什么用交叉验证？", qa?.question)
+        assertEquals("避免单次划分碰运气。", qa?.answer)
+    }
+
+    @Test
+    fun bracketAndFullWidthLabelsAreAccepted() {
+        val qa = QaParser.split("【问】什么是过拟合？\n【答】记住了训练样本的细节。")
+        assertEquals("什么是过拟合？", qa?.question)
+        assertEquals("记住了训练样本的细节。", qa?.answer)
+
+        val full = QaParser.split("Ｑ：学习率是什么？ Ａ：参数更新的步长。")
+        assertEquals("学习率是什么？", full?.question)
+        assertEquals("参数更新的步长。", full?.answer)
+    }
+
+    @Test
+    fun severalPairsInOneQuoteAreAllFound() {
+        val pairs = QaParser.splitAll(
+            """
+            > **Q：** 第一问？
+            > **A：** 第一答。
+            >
+            > **Q：** 第二问？
+            > **A：** 第二答。
+            """.trimIndent()
+        )
+        assertEquals(2, pairs.size)
+        assertEquals("第一答。", pairs[0].answer)
+        assertEquals("第二问？", pairs[1].question)
+    }
+
+    @Test
+    fun listQuizBecomesMaskedCard() {
+        val nodes = parseMarkdown("- **Q：** 什么是梯度？\n- **A：** 函数增长最快的方向。")
+        val quiz = nodes.filterIsInstance<MdNode.Quiz>()
+        assertEquals(1, quiz.size)
+        assertEquals("函数增长最快的方向。", quiz[0].answer)
+    }
+
+    @Test
     fun quoteBlockInsideMarkdownBecomesQuiz() {
         val nodes = parseMarkdown(
             """

@@ -29,9 +29,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.AutoStories
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -52,6 +55,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.voyarina.caliedu.QuizMode
 import com.voyarina.caliedu.core.Category
 import com.voyarina.caliedu.data.LessonRecord
 import com.voyarina.caliedu.data.PdfItem
@@ -94,7 +98,7 @@ fun LibraryScreen(
     onRescan: () -> Unit,
     onUse: (PdfItem, Int, Int) -> Unit,
     onDoc: (PdfItem) -> Unit,
-    onQuiz: (PdfItem) -> Unit,
+    onQuiz: (PdfItem, QuizMode) -> Unit,
     onOpenDoc: (LessonRecord) -> Unit,
     onDeleteDoc: (LessonRecord) -> Unit,
     onRemove: (PdfItem) -> Unit,
@@ -103,6 +107,7 @@ fun LibraryScreen(
     val skin = LocalSkin.current
     val context = LocalContext.current
     var sheetFor by remember { mutableStateOf<Entry?>(null) }
+    var quizFor by remember { mutableStateOf<PdfItem?>(null) }
     var removeAsk by remember { mutableStateOf<PdfItem?>(null) }
     var deleteAsk by remember { mutableStateOf<LessonRecord?>(null) }
 
@@ -180,7 +185,7 @@ fun LibraryScreen(
             },
             onQuiz = {
                 sheetFor = null
-                entry.item?.let(onQuiz)
+                quizFor = entry.item
             },
             onOpen = {
                 sheetFor = null
@@ -208,6 +213,17 @@ fun LibraryScreen(
                 entry.doc?.let { deleteAsk = it }
             },
             onDismiss = { sheetFor = null },
+        )
+    }
+
+    quizFor?.let { item ->
+        QuizModeSheet(
+            name = item.name,
+            onPick = { mode ->
+                quizFor = null
+                onQuiz(item, mode)
+            },
+            onDismiss = { quizFor = null },
         )
     }
 
@@ -513,6 +529,50 @@ private fun EntrySheet(
             if (entry.doc != null) {
                 SheetAction("删除阅读进度", Icons.Rounded.DeleteOutline, onDeleteDoc, danger = true)
             }
+            Spacer(Modifier.height(26.dp))
+        }
+    }
+}
+
+/** 出题方式让用户自己挑：遮罩不用模型，剩下三种都交给模型。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QuizModeSheet(
+    name: String,
+    onPick: (QuizMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val skin = LocalSkin.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = skin.bg,
+        dragHandle = {
+            Box(Modifier.padding(vertical = 10.dp)) {
+                Box(
+                    Modifier
+                        .width(36.dp)
+                        .height(4.dp)
+                        .background(skin.line, CircleShape)
+                )
+            }
+        },
+    ) {
+        Column(Modifier.padding(horizontal = 20.dp)) {
+            Text(
+                name,
+                fontSize = skin.bodySize,
+                fontWeight = FontWeight.Medium,
+                color = skin.text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+            SheetAction("遮罩自测 · 不用模型", Icons.Rounded.VisibilityOff, { onPick(QuizMode.MASK) })
+            SheetAction("AI · 选择题", Icons.Rounded.CheckCircle, { onPick(QuizMode.CHOICE) })
+            SheetAction("AI · 填空题", Icons.Rounded.Edit, { onPick(QuizMode.FILL) })
+            SheetAction("AI · 变式题", Icons.Rounded.AutoAwesome, { onPick(QuizMode.VARIANT) })
             Spacer(Modifier.height(26.dp))
         }
     }

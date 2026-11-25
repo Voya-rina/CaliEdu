@@ -65,6 +65,9 @@ import java.util.UUID
 
 enum class Screen { HOME, RECORDS, SETTINGS, STYLE, MODEL, LIBRARY, LESSON, PLAY, REVIEW }
 
+/** 从讲义出题的四种方式：遮罩在本地完成，其余三种都走模型。 */
+enum class QuizMode { MASK, CHOICE, FILL, VARIANT }
+
 /** 从资料夹导入时最多填这么多字，再多上下文撑不住，钱也撑不住。 */
 private const val MAX_IMPORT_CHARS = 12_000
 
@@ -83,11 +86,25 @@ private const val GRADE_TIMEOUT_MS = 45_000L
 /** 答案超过这个长度就不做成选择题了：选项装不下，判也判不准。 */
 private const val CHOICE_ANSWER_MAX = 320
 
+/** 填空可以比选择题多容纳几个字，但再长就不是一个空能填完的。 */
+private const val FILL_ANSWER_MAX = 160
+
 /** 一次最多拆几道长答案。拆得越多请求越多，长答案通常也就那几道。 */
 private const val MAX_SPLIT_ANSWERS = 6
 
-/** 自测题里的一道：问答 + 该做成选择题还是留成阅读节。 */
-private data class QuizItem(val qa: Qa, val choice: Boolean)
+/** 变式题一次最多拿几道做种子：多了模型就开始应付。 */
+private const val MAX_VARIANT_SEEDS = 8
+
+private enum class QuizKind { READ, CHOICE, FILL }
+
+/** 自测题里的一道：[qa] 是原文出处，[prompt]/[answer] 才是这一道真正要显示和判定的。 */
+private data class QuizItem(
+    val qa: Qa,
+    val kind: QuizKind,
+    val prompt: String = qa.question,
+    val answer: String = qa.answer,
+    val options: List<String> = emptyList(),
+)
 
 /** 接力模式一批写几步。再多，单次输出就容易在 4k token 处被截断。 */
 private const val RELAY_BATCH_STEPS = 6
@@ -849,14 +866,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 从讲义里的 Q/A 直接出一套自测题。
+     * 从讲义里的 Q/A 出一整套自测题。
      *
-     * 问题和答案都是原文，模型只补干扰项——比让它重写一遍准，也省得多。
-     * 答案太长的问答不动它，原样留成阅读节；宁可少一道题，也不出一道判不准的题。
+     * 遮罩不用模型；其余三种都只在原文上做最小改动：补干扰项、挖一个空、换情境重出。
+     * 答案太长又拆不动的留成阅读节——宁可少一道题，也不出一道判不准的题。
      */
-    fun quizFromDoc(item: PdfItem) {
+    fun quizFromDoc(item: PdfItem, mode: QuizMode = QuizMode.CHOICE) {
+        if (mode == QuizMode.MASK) {
+            openAsDoc(item)
+            return
+        }
         if (!state.settings.canTalk) {
-            toast("出题需要模型。先点「讲义」，问答会以遮罩形式让你自测。")
+            toast("这种出题方式需要模型。可以先选「遮罩自测」，不用配 Key。")
             return
         }
         val ctx = getApplication<Application>()
@@ -870,50 +891,115 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             val qas = withContext(Dispatchers.Default) { QaParser.parse(raw) }
             if (qas.isEmpty()) {
                 state = state.copy(libraryBusy = false)
-                toast("没识别到成对的 Q/A（形如 Q: … A: …，写成引用块也认）")
+                toast("没识别到成对的 Q/A（Q: … A: …，引用块、列表、加粗都认）")
                 return@launch
             }
             state = state.copy(libraryBusy = false)
             val settings = store.current()
             val name = item.name.substringBeforeLast('.').ifBlank { "问答自测" }
-
-            // 一段话的答案没法直接做选择题：三个干扰项怎么造都判不准。
-            // 先让模型只在原文里「取」，把它拆成两三道答案很短的小题；
-            // 拆不动的（或者没配模型）留成阅读节——宁可少一道题，也不出一道判不准的题。
-            val longPairs = qas.mapIndexedNotNull { index, qa ->
-                if (qa.answer.length > CHOICE_ANSWER_MAX) (index + 1) to qa else null
-            }
-            beginLoading(
-                if (longPairs.isEmpty()) "正在给 ${qas.size} 道问答出选项"
-                else "正在把长答案拆成小题"
-            )
+            beginLoading("正在准备 ${qas.size} 道问答")
             try {
-                val splits = if (longPairs.isEmpty()) {
-                    emptyMap()
-                } else {
-                    generator.splitLongAnswers(settings, name, longPairs.take(MAX_SPLIT_ANSWERS))
+                val items = when (mode) {
+                    QuizMode.CHOICE -> choiceItems(settings, name, qas)
+                    QuizMode.FILL -> fillItems(settings, name, qas)
+                    QuizMode.VARIANT -> variantItems(settings, name, qas)
+                    QuizMode.MASK -> emptyList()
                 }
-                val items = buildList {
-                    qas.forEachIndexed { index, qa ->
-                        val sub = splits[index + 1]
-                        when {
-                            qa.answer.length <= CHOICE_ANSWER_MAX -> add(QuizItem(qa, true))
-                            !sub.isNullOrEmpty() -> sub.forEach { add(QuizItem(it, true)) }
-                            else -> add(QuizItem(qa, false))
-                        }
-                    }
+                if (items.none { it.kind != QuizKind.READ }) {
+                    fail(ChatException("模型没给出可用的题目。可以先用「遮罩自测」。"))
+                    return@launch
                 }
-                val asking = items.mapIndexedNotNull { index, item ->
-                    if (item.choice) (index + 1) to item.qa else null
-                }
-                state = state.copy(loading = "正在给 ${asking.size} 道问答出选项")
-                val plan = quizPlan(item, raw, items, name)
-                val options = generator.quizOptions(settings, plan.title, asking)
-                openQuiz(plan, items, options)
+                openQuiz(quizPlan(item, raw, items, name), items)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 fail(e)
+            }
+        }
+    }
+
+    /** 选择题：长答案先在原文里拆短，再让模型只补三个干扰项。 */
+    private suspend fun choiceItems(settings: LlmSettings, name: String, qas: List<Qa>): List<QuizItem> {
+        val long = qas.mapIndexedNotNull { index, qa ->
+            if (qa.answer.length > CHOICE_ANSWER_MAX) (index + 1) to qa else null
+        }
+        state = state.copy(
+            loading = if (long.isEmpty()) "正在给 ${qas.size} 道问答出选项" else "正在把长答案拆成小题"
+        )
+        val splits = if (long.isEmpty()) emptyMap()
+        else generator.splitLongAnswers(settings, name, long.take(MAX_SPLIT_ANSWERS))
+        val items = buildList {
+            qas.forEachIndexed { index, qa ->
+                val sub = splits[index + 1]
+                when {
+                    qa.answer.length <= CHOICE_ANSWER_MAX -> add(QuizItem(qa, QuizKind.CHOICE))
+                    !sub.isNullOrEmpty() -> sub.forEach { add(QuizItem(it, QuizKind.CHOICE)) }
+                    else -> add(QuizItem(qa, QuizKind.READ))
+                }
+            }
+        }
+        val asking = items.mapIndexedNotNull { index, item ->
+            if (item.kind == QuizKind.CHOICE) (index + 1) to item.qa else null
+        }
+        state = state.copy(loading = "正在给 ${asking.size} 道问答出选项")
+        val options = if (asking.isEmpty()) emptyMap() else generator.quizOptions(settings, name, asking)
+        return items.mapIndexed { index, item ->
+            if (item.kind == QuizKind.CHOICE) item.copy(options = options[index + 1].orEmpty()) else item
+        }
+    }
+
+    /** 填空题：模型从答案里挖一个短空，题干和答案都还是原文的。 */
+    private suspend fun fillItems(settings: LlmSettings, name: String, qas: List<Qa>): List<QuizItem> {
+        val long = qas.mapIndexedNotNull { index, qa ->
+            if (qa.answer.length > FILL_ANSWER_MAX) (index + 1) to qa else null
+        }
+        state = state.copy(
+            loading = if (long.isEmpty()) "正在把 ${qas.size} 道问答改成填空" else "正在把长答案拆成小题"
+        )
+        val splits = if (long.isEmpty()) emptyMap()
+        else generator.splitLongAnswers(settings, name, long.take(MAX_SPLIT_ANSWERS))
+        val items = buildList {
+            qas.forEachIndexed { index, qa ->
+                val sub = splits[index + 1]
+                when {
+                    qa.answer.length <= FILL_ANSWER_MAX -> add(QuizItem(qa, QuizKind.FILL))
+                    !sub.isNullOrEmpty() -> sub.forEach { add(QuizItem(it, QuizKind.FILL)) }
+                    else -> add(QuizItem(qa, QuizKind.READ))
+                }
+            }
+        }
+        val asking = items.mapIndexedNotNull { index, item ->
+            if (item.kind == QuizKind.FILL) (index + 1) to item.qa else null
+        }
+        state = state.copy(loading = "正在给 ${asking.size} 道题挖空")
+        val blanks = if (asking.isEmpty()) emptyMap() else generator.fillBlanks(settings, name, asking)
+        return items.mapIndexed { index, item ->
+            val blank = blanks[index + 1]
+            if (item.kind == QuizKind.FILL && blank != null && blank.answer.isNotBlank()) {
+                item.copy(prompt = blank.question, answer = blank.answer)
+            } else item
+        }
+    }
+
+    /** 变式题：只拿短问答做种子，一次接力就拿到「新题 + 答案 + 干扰项」。 */
+    private suspend fun variantItems(settings: LlmSettings, name: String, qas: List<Qa>): List<QuizItem> {
+        val seeds = qas.mapIndexedNotNull { index, qa ->
+            if (qa.answer.length <= CHOICE_ANSWER_MAX) (index + 1) to qa else null
+        }.take(MAX_VARIANT_SEEDS)
+        if (seeds.isEmpty()) return qas.map { QuizItem(it, QuizKind.READ) }
+        state = state.copy(loading = "正在按 ${seeds.size} 道问答出变式题")
+        val made = generator.variantQuiz(settings, name, seeds)
+        return seeds.mapIndexed { index, (_, original) ->
+            val generated = made[index + 1]
+            if (generated == null || generated.qa.answer.isBlank()) {
+                QuizItem(original, QuizKind.FILL)
+            } else {
+                QuizItem(
+                    qa = generated.qa,
+                    kind = if (generated.options.size >= 2) QuizKind.CHOICE else QuizKind.FILL,
+                    answer = generated.qa.answer,
+                    options = generated.options,
+                )
             }
         }
     }
@@ -923,59 +1009,88 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return LessonPlan(
             title = name.take(40),
             kind = track.key,
-            oneLine = "${items.count { it.choice }} 问",
+            oneLine = "${items.count { it.kind != QuizKind.READ }} 问",
             tags = Subject.guess(raw, name)?.let { listOf(it) }
                 ?: Subject.normalize(emptyList(), track, name),
             steps = items.mapIndexed { index, item ->
                 StepBrief(
                     n = index + 1,
-                    title = item.qa.question.take(24),
+                    title = item.prompt.take(24),
                     stage = "自测",
                     goal = "",
-                    judgeKind = if (item.choice) "choice" else "none",
+                    judgeKind = when (item.kind) {
+                        QuizKind.CHOICE -> "choice"
+                        QuizKind.FILL -> "short"
+                        QuizKind.READ -> "none"
+                    },
                 )
             },
             needsRun = false,
         )
     }
 
-    private fun openQuiz(
-        plan: LessonPlan,
-        items: List<QuizItem>,
-        options: Map<Int, List<String>>,
-    ) {
+    /** 填空的答案可能和原文略有出入，两个都收；归一化后重复的只留一个。 */
+    private fun expectedAnswers(item: QuizItem): String =
+        listOf(item.answer, item.qa.answer)
+            .filter { it.isNotBlank() }
+            .distinctBy { Judge.normalize(it) }
+            .joinToString("|")
+
+    private fun openQuiz(plan: LessonPlan, items: List<QuizItem>) {
         val contents = items.mapIndexed { index, item ->
             val n = index + 1
-            val qa = item.qa
-            val distractors = options[n].orEmpty()
-                .filter { Judge.normalize(it) != Judge.normalize(qa.answer) }
-                .distinctBy { Judge.normalize(it) }
-                .take(3)
-            if (distractors.isEmpty()) {
-                // 没拿到选项（长答案，或模型没吐回来）：当阅读节，不硬出题。
-                StepContent(
+            when (item.kind) {
+                QuizKind.READ -> StepContent(
                     n = n,
-                    blocks = listOf(Block("core", qa.answer)),
+                    blocks = listOf(Block("core", item.qa.answer)),
                     question = Question(),
                     hints = emptyList(),
                     onCorrect = "",
                     summary = emptyList(),
                 )
-            } else {
-                StepContent(
+
+                QuizKind.FILL -> StepContent(
                     n = n,
-                    blocks = emptyList(),
                     question = Question(
-                        prompt = qa.question,
-                        kind = "choice",
-                        choices = buildChoices(qa.answer, distractors, n),
-                        answer = qa.answer,
+                        prompt = item.prompt,
+                        kind = "short",
+                        answer = item.answer,
+                        expect = expectedAnswers(item),
                     ),
-                    hints = emptyList(),
-                    // 答对之后才给完整答案，答题前它只藏在选项里。
-                    onCorrect = qa.answer,
-                    summary = emptyList(),
+                    onCorrect = item.qa.answer,
                 )
+
+                QuizKind.CHOICE -> {
+                    val distractors = item.options
+                        .filter { Judge.normalize(it) != Judge.normalize(item.answer) }
+                        .distinctBy { Judge.normalize(it) }
+                        .take(3)
+                    if (distractors.isEmpty()) {
+                        // 模型没给可用选项：降级成填空，不硬造一道一眼能猜中的选择题。
+                        StepContent(
+                            n = n,
+                            question = Question(
+                                prompt = item.qa.question,
+                                kind = "short",
+                                answer = item.answer,
+                                expect = expectedAnswers(item),
+                            ),
+                            onCorrect = item.qa.answer,
+                        )
+                    } else {
+                        StepContent(
+                            n = n,
+                            question = Question(
+                                prompt = item.prompt,
+                                kind = "choice",
+                                choices = buildChoices(item.answer, distractors, n),
+                                answer = item.answer,
+                            ),
+                            // 答对之后才给完整答案，答题前它只藏在选项里。
+                            onCorrect = item.qa.answer,
+                        )
+                    }
+                }
             }
         }.associateBy { it.n }
 
@@ -1392,7 +1507,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         persist()
     }
 
-    /** 回看中途想退出：回到「走完了」那一屏，记录仍然是已完成。 */
+    /** 回看中途想退出：记录仍然是已完成；讲义直接回来源页，不去那张多余的完结屏。 */
     fun endReview() {
         if (!state.reviewing) return
         state = state.copy(
@@ -1401,6 +1516,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             progress = Progress(idx = state.reviewResume),
             passed = state.reviewPassed,
         )
+        if (state.isDoc) {
+            back()
+            return
+        }
         persist(finished = true)
         refreshRecords()
     }
@@ -1425,7 +1544,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
         val nextIndex = state.progress.idx + 1
         if (nextIndex >= plan.steps.size) {
-            // 回看走到最后一节，回的是「走完了」那一屏，不是把这一课再结一次。
+            // 讲义没有「答对几题」可总结，完结屏只是挡在正文和记录之间的一道墙：
+            // 读完最后一节直接回来源页，进度照记，回看从目录里挑一节就行。
+            if (state.isDoc) {
+                state = state.copy(finished = true, reviewing = false)
+                persist(finished = true)
+                back()
+                return
+            }
+            // 回看走到最后一步，回的是「走完了」那一屏，不是把这一课再结一次。
             if (state.reviewing) {
                 state = state.copy(finished = true, reviewing = false)
                 persist(finished = true)
@@ -1684,7 +1811,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             feedback = null,
             draft = "",
             notes = "",
-            finished = record.finished,
+            // 讲义即使标了「已读完」也直接回到正文；完结屏只对有问答的课程有意义。
+            finished = if (record.isDoc) false else record.finished,
             reviewing = false,
             // 上次退出时停在通读，这次进来就还在通读，而且翻回读到的那一节。
             reading = record.reading,
@@ -1836,6 +1964,8 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val id = state.recordId
         if (id.isBlank()) return
         val existing = state.records.firstOrNull { it.id == id }
+        // 讲义重开时 finished 被清掉，只为了让正文直接露出来；「已读完」这个事实不能跟着丢。
+        val docFinished = state.isDoc && existing?.finished == true
         val record = (existing ?: LessonRecord(id = id, createdAt = System.currentTimeMillis())).copy(
             title = plan.title,
             oneLine = plan.oneLine,
@@ -1846,7 +1976,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             cursor = state.progress.idx,
             solved = state.solved,
             wrongs = state.wrongs,
-            finished = finished,
+            finished = finished || docFinished,
             mistakes = state.mistakes,
             passed = state.passed.sorted(),
             reading = state.reading,

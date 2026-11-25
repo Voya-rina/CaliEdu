@@ -314,7 +314,11 @@ fun LessonScreen(
                     .padding(start = 20.dp, end = 12.dp, top = 5.dp, bottom = 5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("回看中 · 题目不再要求作答", fontSize = skin.fs(11.5f), color = skin.accentDeep)
+                Text(
+                    if (state.isDoc) "回看中 · 只读" else "回看中 · 题目不再要求作答",
+                    fontSize = skin.fs(11.5f),
+                    color = skin.accentDeep,
+                )
                 Spacer(Modifier.weight(1f))
                 Text(
                     "结束回看",
@@ -726,7 +730,7 @@ private fun StepBody(
                 .padding(horizontal = 20.dp)
         ) {
         Spacer(Modifier.height(20.dp))
-        if (state.finished) {
+        if (state.finished && !state.isDoc) {
             FinishedView(state, skin, onBack = onFinish, onSimilar = onSimilar, onReview = onReview)
             Spacer(Modifier.height(40.dp))
             return@Column

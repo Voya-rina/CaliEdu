@@ -187,9 +187,9 @@ private fun mergeQuiz(nodes: List<MdNode>): List<MdNode> {
     while (i < nodes.size) {
         val text = quizTextOf(nodes[i])
         if (text != null) {
-            val same = QaParser.split(text)
-            if (same != null) {
-                out += MdNode.Quiz(same.question, same.answer)
+            val same = QaParser.splitAll(text)
+            if (same.isNotEmpty()) {
+                same.forEach { out += MdNode.Quiz(it.question, it.answer) }
                 i++
                 continue
             }
@@ -209,10 +209,24 @@ private fun mergeQuiz(nodes: List<MdNode>): List<MdNode> {
     return out
 }
 
-/** 可能写着问答的节点。引用块要算进来——「Q/A 放进引用块」是讲义里最常见的排版。 */
+/**
+ * 可能写着问答的节点。
+ *
+ * 引用块是讲义里最常见的排版；列表项也不能漏——很多人把问答写成
+ * `- **Q：** … / - **A：** …`，只认段落会把整组问答原样印出来。
+ * 列表里夹着普通条目时不合并，避免把正文吞进答案。
+ */
 private fun quizTextOf(node: MdNode): String? = when (node) {
     is MdNode.Para -> node.text
     is MdNode.Quote -> node.text
+    is MdNode.Bullet -> {
+        val qaItems = node.items.takeWhile {
+            QaParser.questionOf(it) != null || QaParser.answerOf(it) != null
+        }
+        if (qaItems.isNotEmpty() && QaParser.questionOf(qaItems.first()) != null) {
+            qaItems.joinToString("\n")
+        } else null
+    }
     else -> null
 }
 

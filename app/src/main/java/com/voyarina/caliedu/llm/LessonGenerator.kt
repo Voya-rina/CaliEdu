@@ -29,6 +29,9 @@ private data class VariantJson(val title: String = "", val problem: String = "")
 
 data class Grade(val verdict: Verdict, val note: String)
 
+/** 变式题：新题 + 答案 + 干扰项，一次接力拿全。 */
+data class GeneratedQuiz(val qa: Qa, val options: List<String>)
+
 class LessonGenerator(
     val relay: RelayBroker = RelayBroker(),
     private val directFor: (LlmSettings) -> ChatChannel = { OpenAiChatClient(it) },
@@ -404,6 +407,102 @@ class LessonGenerator(
             if (cursor < numbers.size) slots[numbers[cursor]] = pairs
         }
         return slots
+    }
+
+    /**
+     * 把讲义里已有的问答改成填空题。
+     *
+     * 只从答案里挖一小段，题干其余部分照抄原文；一次最多 6 题，
+     * 手动接力时一屏就能装下，不用复制七八趟。
+     */
+    suspend fun fillBlanks(
+        settings: LlmSettings,
+        title: String,
+        items: List<Pair<Int, Qa>>,
+    ): Map<Int, Qa> {
+        if (items.isEmpty() || !settings.canTalk) return emptyMap()
+        val out = mutableMapOf<Int, Qa>()
+        items.chunked(6).forEach { batch ->
+            val raw = runCatching {
+                channelOf(settings).complete(
+                    Prompts.blankSystem(),
+                    Prompts.blankUser(title, batch),
+                    json = true,
+                    label = "改写填空（${batch.size} 题）",
+                )
+            }.getOrNull() ?: return@forEach
+            out += parseBlanks(raw, batch.map { it.first })
+        }
+        return out
+    }
+
+    internal fun parseBlanks(raw: String, numbers: List<Int>): Map<Int, Qa> {
+        val out = mutableMapOf<Int, Qa>()
+        numberedItems(raw).forEach { (n, obj) ->
+            val q = (obj["q"] as? JsonPrimitive)?.content?.trim().orEmpty()
+            val a = (obj["a"] as? JsonPrimitive)?.content?.trim().orEmpty()
+            if (q.isBlank() || a.isBlank()) return@forEach
+            val slot = slotOf(n, numbers, out.keys) ?: return@forEach
+            out[slot] = Qa(q, a)
+        }
+        return out
+    }
+
+    /** 变式题：换情境重出，连干扰项一起给，避免接力模式再跑一趟。 */
+    suspend fun variantQuiz(
+        settings: LlmSettings,
+        title: String,
+        items: List<Pair<Int, Qa>>,
+    ): Map<Int, GeneratedQuiz> {
+        if (items.isEmpty() || !settings.canTalk) return emptyMap()
+        val out = mutableMapOf<Int, GeneratedQuiz>()
+        items.chunked(4).forEach { batch ->
+            val raw = runCatching {
+                channelOf(settings).complete(
+                    Prompts.variantQuizSystem(),
+                    Prompts.variantQuizUser(title, batch),
+                    json = true,
+                    label = "出变式题（${batch.size} 题）",
+                )
+            }.getOrNull() ?: return@forEach
+            out += parseVariants(raw, batch.map { it.first })
+        }
+        return out
+    }
+
+    internal fun parseVariants(raw: String, numbers: List<Int>): Map<Int, GeneratedQuiz> {
+        val out = mutableMapOf<Int, GeneratedQuiz>()
+        numberedItems(raw).forEach { (n, obj) ->
+            val q = (obj["q"] as? JsonPrimitive)?.content?.trim().orEmpty()
+            val a = (obj["a"] as? JsonPrimitive)?.content?.trim().orEmpty()
+            if (q.isBlank() || a.isBlank()) return@forEach
+            val options = (obj["options"] as? JsonArray)
+                ?.mapNotNull { (it as? JsonPrimitive)?.content?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                .orEmpty()
+                .distinct()
+                .take(3)
+            val slot = slotOf(n, numbers, out.keys) ?: return@forEach
+            out[slot] = GeneratedQuiz(Qa(q, a), options)
+        }
+        return out
+    }
+
+    /** 模型写成局部编号时按出现顺序补空位，和干扰项那边同一套办法。 */
+    private fun slotOf(n: Int?, numbers: List<Int>, used: Set<Int>): Int? =
+        if (n != null && n in numbers && n !in used) n else numbers.firstOrNull { it !in used }
+
+    private fun numberedItems(raw: String): List<Pair<Int?, JsonObject>> {
+        val text = JsonRepair.extract(raw) ?: return emptyList()
+        val root = runCatching { json.parseToJsonElement(text) }.getOrNull() ?: return emptyList()
+        val array = when (root) {
+            is JsonArray -> root
+            is JsonObject -> root["items"] as? JsonArray ?: return emptyList()
+            else -> return emptyList()
+        }
+        return array.mapNotNull { el ->
+            val obj = el as? JsonObject ?: return@mapNotNull null
+            (obj["n"] as? JsonPrimitive)?.content?.toIntOrNull() to obj
+        }
     }
 
     suspend fun grade(
